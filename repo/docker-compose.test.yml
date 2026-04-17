@@ -1,0 +1,41 @@
+# Test stack used by run_tests.sh. Brings up a throwaway Postgres
+# instance, a backend-test container (Go test suite + integration tests),
+# and a frontend-test container (vitest). Every service is
+# self-contained; no host volumes are mounted.
+
+services:
+  db:
+    image: postgres:14-alpine
+    environment:
+      POSTGRES_USER:     "oops"
+      POSTGRES_PASSWORD: "oops"
+      POSTGRES_DB:       "oops_test"
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U oops -d oops_test"]
+      interval: 2s
+      timeout:  2s
+      retries:  30
+    tmpfs:
+      # Ephemeral data; we never need to keep the test schema between
+      # run_tests.sh invocations.
+      - /var/lib/postgresql/data
+
+  backend-test:
+    build:
+      context: ./backend
+      target:  test
+    environment:
+      INTEGRATION_DB: "postgres://oops:oops@db:5432/oops_test?sslmode=disable"
+    depends_on:
+      db:
+        condition: service_healthy
+    # Run unit + integration tests. `-race` is omitted in the container
+    # because the test image disables CGO for reproducible static binary
+    # builds; race detection runs on developer laptops directly.
+    command: ["go", "test", "-cover", "./..."]
+
+  frontend-test:
+    build:
+      context: ./frontend
+      target:  test
+    command: ["npm", "test"]

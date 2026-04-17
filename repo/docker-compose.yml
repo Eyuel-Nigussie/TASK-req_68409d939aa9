@@ -1,0 +1,59 @@
+# Unified Offline Operations Portal — runtime stack.
+#
+# Three services:
+#   * db        — PostgreSQL 14, initialized by migrations/0001_init.sql
+#                 via the backend entrypoint on first start.
+#   * backend   — Go + Echo REST API on port 8080.
+#   * frontend  — nginx serving the React bundle on port 80, with /api/
+#                 reverse-proxied to the backend.
+#
+# All three share one Docker network so the frontend can resolve
+# `backend` and the backend can resolve `db` by name.
+
+services:
+  db:
+    image: postgres:14-alpine
+    environment:
+      POSTGRES_USER:     "${POSTGRES_USER:-oops}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-oops}"
+      POSTGRES_DB:       "${POSTGRES_DB:-oops}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-oops} -d ${POSTGRES_DB:-oops}"]
+      interval: 5s
+      timeout:  5s
+      retries:  20
+    ports:
+      - "${DB_PORT:-5432}:5432"
+
+  backend:
+    build:
+      context: ./backend
+      target:  runtime
+    environment:
+      DATABASE_URL:      "postgres://${POSTGRES_USER:-oops}:${POSTGRES_PASSWORD:-oops}@db:5432/${POSTGRES_DB:-oops}?sslmode=disable"
+      LISTEN_ADDR:       ":8080"
+      ENC_KEYS:          "${ENC_KEYS:-}"
+      OOPS_DEV_MODE:     "${OOPS_DEV_MODE:-0}"
+      ADMIN_PASSWORD:    "${ADMIN_PASSWORD:-AdminTest123!}"
+      SEED_DEMO_USERS:   "${SEED_DEMO_USERS:-1}"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target:  runtime
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
