@@ -85,9 +85,11 @@ func (m *Memory) seedDefaultPermissions() {
 		{ID: "dispatch.validate", Description: "Validate dispatch pins & quote fees"},
 		{ID: "dispatch.configure", Description: "Edit service regions and route table"},
 		{ID: "analytics.view", Description: "View operational analytics"},
+		{ID: "orders.export", Description: "Export orders to CSV (bounded filter)"},
 		{ID: "admin.users", Description: "Manage users and permissions"},
 		{ID: "admin.reference", Description: "Edit reference ranges"},
 		{ID: "admin.audit", Description: "View audit log"},
+		{ID: "admin.settings", Description: "Edit system settings (map image, etc.)"},
 	}
 	for _, p := range catalog {
 		m.permCatalog[p.ID] = p
@@ -993,7 +995,7 @@ func (m *Memory) AbnormalReportRate(_ context.Context, fromUnix, toUnix int64) (
 		}
 		for _, ms := range r.Measurements {
 			total++
-			if ms.Flag != lab.FlagNormal && ms.Flag != lab.FlagUnmeasurable && ms.Flag != "" {
+			if ms.Flag.IsAbnormal() {
 				abnormal++
 			}
 		}

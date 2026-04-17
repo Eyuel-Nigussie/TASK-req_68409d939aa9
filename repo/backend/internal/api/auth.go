@@ -3,12 +3,36 @@ package api
 import (
 	"errors"
 	"net/http"
+	"sync"
 
 	"github.com/eaglepoint/oops/backend/internal/auth"
 	"github.com/eaglepoint/oops/backend/internal/httpx"
 	"github.com/eaglepoint/oops/backend/internal/store"
 	"github.com/labstack/echo/v4"
 )
+
+// dummyHashOnce lazily generates a single Argon2id hash the login
+// handler can compare against when a username does not exist. The hash
+// is thrown away (cannot match any real password because the salt is
+// fresh), but running the compare keeps the not-found branch's timing
+// within the same order of magnitude as a real failed login, closing
+// the username-enumeration timing channel.
+var (
+	dummyHashOnce sync.Once
+	dummyHashStr  string
+)
+
+func loginDummyHash() string {
+	dummyHashOnce.Do(func() {
+		h, err := auth.HashPassword("x-not-a-real-user-timing-pad")
+		if err != nil {
+			dummyHashStr = ""
+			return
+		}
+		dummyHashStr = h
+	})
+	return dummyHashStr
+}
 
 // Login accepts username + password, validates policy and lockout, then
 // returns a bearer session token. Failures increment the lockout counter.
@@ -30,6 +54,11 @@ func (s *Server) Login(c echo.Context) error {
 	u, err := s.Store.GetUserByUsername(ctx, body.Username)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			// Burn roughly the same CPU as the real path so a timing
+			// probe can't enumerate usernames. The compare is discarded.
+			if dh := loginDummyHash(); dh != "" {
+				_ = auth.ComparePassword(dh, body.Password)
+			}
 			// Record a failure anyway to rate-limit username enumeration.
 			_ = s.Lockout.RecordFailure(ctx, body.Username)
 			return echo.NewHTTPError(http.StatusUnauthorized, "unauthorized")

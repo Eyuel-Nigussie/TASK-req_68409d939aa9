@@ -342,7 +342,7 @@ func TestRoleEnforcement(t *testing.T) {
 func TestSavedFilters_Validation(t *testing.T) {
 	r := setup(t)
 	tok := r.login(t, "desk1", "correct-horse-battery-staple")
-	// Overly broad filter.
+	// Overly broad filter (size > 100 with no narrowing clause).
 	rec, _ := r.do(t, "POST", "/api/saved-filters", tok, map[string]any{
 		"name":   "all-orders",
 		"filter": map[string]any{"entity": "order", "size": 300},
@@ -350,11 +350,52 @@ func TestSavedFilters_Validation(t *testing.T) {
 	if rec.Code != 400 {
 		t.Fatalf("too-broad should 400, got %d", rec.Code)
 	}
+	// A7 regression guard: a small, fully-open filter is ALSO rejected.
+	// Without this check the caller could paginate the whole table
+	// regardless of what `size` they choose.
+	rec, _ = r.do(t, "POST", "/api/saved-filters", tok, map[string]any{
+		"name":   "small-but-open",
+		"filter": map[string]any{"entity": "order", "size": 10},
+	})
+	if rec.Code != 400 {
+		t.Fatalf("open saved filter at size<=100 should still be rejected, got %d", rec.Code)
+	}
 	rec, _ = r.do(t, "POST", "/api/saved-filters", tok, map[string]any{
 		"name":   "my-placed",
 		"filter": map[string]any{"entity": "order", "statuses": []string{"placed"}, "size": 50},
 	})
 	if rec.Code != 201 {
 		t.Fatalf("valid filter should 201, got %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestQueryOrders_PageCapRejected covers the A7 page-cap half of the
+// fix: even when a filter passes Validate, a caller cannot walk
+// pagination past MaxQueryPage to bypass the export guardrail.
+func TestQueryOrders_PageCapRejected(t *testing.T) {
+	r := setup(t)
+	tok := r.login(t, "desk1", "correct-horse-battery-staple")
+	rec, _ := r.do(t, "POST", "/api/orders/query", tok, map[string]any{
+		"statuses": []string{"placed"},
+		"size":     50,
+		"page":     500, // > MaxQueryPage
+	})
+	if rec.Code != 400 {
+		t.Fatalf("expected 400 for page past cap, got %d", rec.Code)
+	}
+}
+
+// TestQueryOrders_BadDateRejected covers A8 — the QueryOrders handler
+// now returns 400 on a malformed date instead of silently passing
+// through a zero time and widening the result set.
+func TestQueryOrders_BadDateRejected(t *testing.T) {
+	r := setup(t)
+	tok := r.login(t, "desk1", "correct-horse-battery-staple")
+	rec, _ := r.do(t, "POST", "/api/orders/query", tok, map[string]any{
+		"statuses":   []string{"placed"},
+		"start_date": "not-a-date",
+	})
+	if rec.Code != 400 {
+		t.Fatalf("expected 400 for bad start_date, got %d (%s)", rec.Code, rec.Body.String())
 	}
 }

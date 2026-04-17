@@ -181,6 +181,17 @@ func SplitCSV(s string) []string {
 // escape hatch is not set.
 var ErrMissingKeys = errors.New("ENC_KEYS is required; set OOPS_DEV_MODE=1 to permit an ephemeral key for local development only")
 
+// ErrPlaceholderKey is returned when ENC_KEYS matches the historical
+// demo value from .env.example. That hex string is published in the
+// repo, so accepting it would make at-rest encryption trivially
+// reversible by anyone who cloned the source.
+var ErrPlaceholderKey = errors.New("ENC_KEYS uses the public placeholder value; run `go run ./backend/cmd/keygen` to generate a fresh key")
+
+// placeholderKey is the single well-known demo key that previously
+// shipped in .env.example. Compared as a literal so we catch stale
+// copies that were generated before the default was removed.
+const placeholderKey = "1:0101010101010101010101010101010101010101010101010101010101010101"
+
 // BuildVault parses ENC_KEYS from the provided env-getter and returns a
 // configured Vault. When `devMode` is true and keys are absent, an
 // ephemeral key is issued with a console warning.
@@ -201,6 +212,12 @@ func BuildVault(getenv func(string) string, logf func(string, ...any)) (*crypto.
 		}
 		logf("WARNING: OOPS_DEV_MODE=1 and ENC_KEYS unset — generating an ephemeral development key. Data encrypted now will NOT be readable after restart.")
 		return crypto.NewVault(map[uint16][]byte{1: crypto.DeriveKey([]byte("dev-only-not-for-production-use"))})
+	}
+	if strings.TrimSpace(raw) == placeholderKey {
+		if getenv("OOPS_DEV_MODE") != "1" {
+			return nil, ErrPlaceholderKey
+		}
+		logf("WARNING: OOPS_DEV_MODE=1 and ENC_KEYS is the published placeholder value. This is only safe for evaluators; rotate before real data is stored.")
 	}
 	keys := make(map[uint16][]byte)
 	for _, pair := range SplitCSV(raw) {

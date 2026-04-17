@@ -6,17 +6,25 @@ import "errors"
 type Flag string
 
 const (
-	FlagNormal        Flag = "normal"
-	FlagLow           Flag = "low"
-	FlagHigh          Flag = "high"
-	FlagCriticalLow   Flag = "critical_low"
-	FlagCriticalHigh  Flag = "critical_high"
-	FlagUnmeasurable  Flag = "unmeasurable"
+	FlagNormal         Flag = "normal"
+	FlagLow            Flag = "low"
+	FlagHigh           Flag = "high"
+	FlagCriticalLow    Flag = "critical_low"
+	FlagCriticalHigh   Flag = "critical_high"
+	FlagUnmeasurable   Flag = "unmeasurable"
+	// FlagUncategorized is assigned when no reference range is
+	// configured for the test code. It is distinct from FlagNormal so
+	// the UI can render the row neutrally rather than green, which would
+	// otherwise misrepresent an uncategorized test as clinically normal.
+	FlagUncategorized  Flag = "uncategorized"
 )
 
-// IsAbnormal is true for anything other than FlagNormal, used by the UI to
-// highlight values in red.
-func (f Flag) IsAbnormal() bool { return f != FlagNormal && f != FlagUnmeasurable }
+// IsAbnormal is true for results that should be highlighted. Normal,
+// unmeasurable, and uncategorized readings are NOT abnormal — the
+// latter because we have no reference range to compare against.
+func (f Flag) IsAbnormal() bool {
+	return f != FlagNormal && f != FlagUnmeasurable && f != FlagUncategorized
+}
 
 // IsCritical is true when the result falls outside the critical bounds.
 func (f Flag) IsCritical() bool { return f == FlagCriticalLow || f == FlagCriticalHigh }
@@ -116,7 +124,9 @@ func EvaluateAll(ms []Measurement, rs *RangeSet, demo string) []Measurement {
 		}
 		r, err := rs.Match(m.TestCode, demo)
 		if err != nil {
-			m.Flag = FlagNormal // No range configured: leave untouched.
+			// No range configured for this test code — mark neutrally so
+			// the UI doesn't advertise an uncategorized result as normal.
+			m.Flag = FlagUncategorized
 			out[i] = m
 			continue
 		}

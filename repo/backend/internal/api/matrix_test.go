@@ -47,17 +47,25 @@ func TestRoleEndpointMatrix(t *testing.T) {
 		// role -> "allow" | "deny"
 		expect map[string]string
 	}
+	// Per-row expectations reflect the TIGHTENED authorization policy
+	// introduced after the Partial-Pass audit: every mutating endpoint
+	// requires the matching `*.write` permission, and Analyst has only
+	// `*.read` / `analytics.view` / `orders.export`. Non-owning roles
+	// are explicitly denied from writes they don't need.
 	rows := []row{
+		// customers.read is held by admin/desk/tech/dispatch/analyst.
 		{"GET", "/api/customers/" + custID,
-			map[string]string{"admin1": "allow", "desk1": "allow", "tech1": "allow", "dispatch1": "allow"}},
+			map[string]string{"admin1": "allow", "desk1": "allow", "tech1": "deny", "dispatch1": "allow"}},
+		// customers.write held only by admin + front_desk.
 		{"POST", "/api/customers",
-			map[string]string{"admin1": "allow", "desk1": "allow", "tech1": "allow", "dispatch1": "allow"}},
+			map[string]string{"admin1": "allow", "desk1": "allow", "tech1": "deny", "dispatch1": "deny"}},
 		{"GET", "/api/orders",
 			map[string]string{"admin1": "allow", "desk1": "allow", "tech1": "deny", "dispatch1": "allow"}},
 		{"GET", "/api/orders/" + orderID,
 			map[string]string{"admin1": "allow", "desk1": "allow", "tech1": "deny", "dispatch1": "allow"}},
+		// orders.write held only by admin + front_desk; dispatch has read.
 		{"POST", "/api/orders",
-			map[string]string{"admin1": "allow", "desk1": "allow", "tech1": "deny", "dispatch1": "allow"}},
+			map[string]string{"admin1": "allow", "desk1": "allow", "tech1": "deny", "dispatch1": "deny"}},
 		{"GET", "/api/samples",
 			map[string]string{"admin1": "allow", "desk1": "deny", "tech1": "allow", "dispatch1": "deny"}},
 		{"GET", "/api/samples/" + sampleID,
@@ -152,7 +160,8 @@ func TestIDOR_SharedEntitiesRespectRoles(t *testing.T) {
 		{"dispatch->sample", "GET", "/api/samples/" + sampleID, r.login(t, "dispatch1", "correct-horse-battery-staple"), http.StatusForbidden},
 		// Order-gated endpoints: lab tech should get 403.
 		{"tech->order", "GET", "/api/orders/" + orderID, tech, http.StatusForbidden},
-		{"tech->customer", "GET", "/api/customers/" + custID, tech, http.StatusOK},
+		// lab_tech no longer has customers.read — denied.
+		{"tech->customer", "GET", "/api/customers/" + custID, tech, http.StatusForbidden},
 		// 404s for valid-role-but-nonexistent targets — must not 403 or leak.
 		{"desk->missing-customer", "GET", "/api/customers/does-not-exist", desk, http.StatusNotFound},
 		{"tech->missing-sample", "GET", "/api/samples/does-not-exist", tech, http.StatusNotFound},

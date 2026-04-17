@@ -9,19 +9,38 @@ import (
 )
 
 // Analytics handlers produce deterministic, bounded aggregates for the
-// analyst workspace. All time windows are optional; when absent the store
-// aggregates across all rows. The "from" and "to" query params are Unix
-// seconds so the client doesn't need timezone logic.
+// analyst workspace. Time windows are optional but always bounded: when
+// a request omits `from`/`to`, the handler applies a default 90-day
+// trailing window so the store never sees an unbounded (0,0) pair and
+// the dashboard stays responsive. The `from` and `to` query params are
+// Unix seconds so the client doesn't need timezone logic.
 
-func parseWindow(c echo.Context) (int64, int64) {
+// defaultAnalyticsWindowSeconds is the width of the trailing window
+// applied when a caller omits both `from` and `to`.
+const defaultAnalyticsWindowSeconds int64 = 90 * 24 * 60 * 60
+
+func (s *Server) parseWindow(c echo.Context) (int64, int64) {
 	from, _ := strconv.ParseInt(c.QueryParam("from"), 10, 64)
 	to, _ := strconv.ParseInt(c.QueryParam("to"), 10, 64)
+	// When the caller supplies neither bound, default to the last 90
+	// days so analytics queries remain bounded. If only one bound was
+	// supplied, anchor the missing side to the clock.
+	now := s.Clock().Unix()
+	if from == 0 && to == 0 {
+		return now - defaultAnalyticsWindowSeconds, now
+	}
+	if to == 0 {
+		to = now
+	}
+	if from == 0 {
+		from = to - defaultAnalyticsWindowSeconds
+	}
 	return from, to
 }
 
 // AnalyticsOrderStatus returns counts of orders by status within the window.
 func (s *Server) AnalyticsOrderStatus(c echo.Context) error {
-	from, to := parseWindow(c)
+	from, to := s.parseWindow(c)
 	out, err := s.Store.OrderStatusCounts(c.Request().Context(), from, to)
 	if err != nil {
 		return httpx.WriteError(c, err)
@@ -31,7 +50,7 @@ func (s *Server) AnalyticsOrderStatus(c echo.Context) error {
 
 // AnalyticsOrdersPerDay returns a daily time-series of order counts.
 func (s *Server) AnalyticsOrdersPerDay(c echo.Context) error {
-	from, to := parseWindow(c)
+	from, to := s.parseWindow(c)
 	out, err := s.Store.OrdersPerDay(c.Request().Context(), from, to)
 	if err != nil {
 		return httpx.WriteError(c, err)
@@ -41,7 +60,7 @@ func (s *Server) AnalyticsOrdersPerDay(c echo.Context) error {
 
 // AnalyticsSampleStatus mirrors the order-status aggregation for samples.
 func (s *Server) AnalyticsSampleStatus(c echo.Context) error {
-	from, to := parseWindow(c)
+	from, to := s.parseWindow(c)
 	out, err := s.Store.SampleStatusCounts(c.Request().Context(), from, to)
 	if err != nil {
 		return httpx.WriteError(c, err)
@@ -52,7 +71,7 @@ func (s *Server) AnalyticsSampleStatus(c echo.Context) error {
 // AnalyticsAbnormalRate is the "quality" KPI: fraction of measurements
 // flagged abnormal across reports issued inside the window.
 func (s *Server) AnalyticsAbnormalRate(c echo.Context) error {
-	from, to := parseWindow(c)
+	from, to := s.parseWindow(c)
 	out, err := s.Store.AbnormalReportRate(c.Request().Context(), from, to)
 	if err != nil {
 		return httpx.WriteError(c, err)
@@ -74,7 +93,7 @@ func (s *Server) AnalyticsExceptionsByKind(c echo.Context) error {
 // dashboard can hydrate with a single request.
 func (s *Server) AnalyticsSummary(c echo.Context) error {
 	ctx := c.Request().Context()
-	from, to := parseWindow(c)
+	from, to := s.parseWindow(c)
 	orderStatus, _ := s.Store.OrderStatusCounts(ctx, from, to)
 	sampleStatus, _ := s.Store.SampleStatusCounts(ctx, from, to)
 	series, _ := s.Store.OrdersPerDay(ctx, from, to)

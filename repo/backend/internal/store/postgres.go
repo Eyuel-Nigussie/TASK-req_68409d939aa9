@@ -1307,7 +1307,7 @@ func (p *Postgres) AbnormalReportRate(ctx context.Context, fromUnix, toUnix int6
 		}
 		for _, m := range ms {
 			total++
-			if m.Flag != lab.FlagNormal && m.Flag != lab.FlagUnmeasurable && m.Flag != "" {
+			if m.Flag.IsAbnormal() {
 				abnormal++
 			}
 		}

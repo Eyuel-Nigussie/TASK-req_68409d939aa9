@@ -111,8 +111,8 @@ func TestEvaluateAll(t *testing.T) {
 	if out[1].Flag != FlagHigh {
 		t.Fatal("second should be high")
 	}
-	if out[2].Flag != FlagNormal {
-		t.Fatal("no range -> normal fallback")
+	if out[2].Flag != FlagUncategorized {
+		t.Fatalf("no range -> uncategorized fallback, got %q", out[2].Flag)
 	}
 	if out[3].Flag != FlagUnmeasurable {
 		t.Fatal("unmeasurable should be flagged")

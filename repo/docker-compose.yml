@@ -37,7 +37,7 @@ services:
       ENC_KEYS:          "${ENC_KEYS:-}"
       OOPS_DEV_MODE:     "${OOPS_DEV_MODE:-0}"
       ADMIN_PASSWORD:    "${ADMIN_PASSWORD:-AdminTest123!}"
-      SEED_DEMO_USERS:   "${SEED_DEMO_USERS:-1}"
+      SEED_DEMO_USERS:   "${SEED_DEMO_USERS:-0}"
     depends_on:
       db:
         condition: service_healthy

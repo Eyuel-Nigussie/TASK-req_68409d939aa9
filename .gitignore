@@ -1,6 +1,8 @@
 # IDE / harness state — not part of the delivery.
 .claude/
 /ro be deleted
+.DS_Store
+**/.DS_Store
 
 # Honor every child .gitignore (repo/.gitignore covers node_modules,
 # dist, coverage.out, .env, etc.).

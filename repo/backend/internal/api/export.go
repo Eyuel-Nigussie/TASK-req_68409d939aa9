@@ -48,12 +48,18 @@ func (s *Server) ExportOrdersCSV(c echo.Context) error {
 		Offset:   (body.Page - 1) * body.Size,
 	}
 	if body.StartDate != "" {
-		t, _ := filter.ParseDate(body.StartDate)
+		t, err := filter.ParseDate(body.StartDate)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 		ts := t.Unix()
 		q.StartUnix = &ts
 	}
 	if body.EndDate != "" {
-		t, _ := filter.ParseDate(body.EndDate)
+		t, err := filter.ParseDate(body.EndDate)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		}
 		ts := t.Unix() + 86399
 		q.EndUnix = &ts
 	}

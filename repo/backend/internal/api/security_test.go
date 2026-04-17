@@ -92,6 +92,110 @@ func TestRoleEnforcement_LabEndpointsRejectFrontDesk(t *testing.T) {
 	}
 }
 
+// TestRoleEnforcement_WriteDenyMatrix covers audit findings A1–A3. Each
+// write endpoint is gated by a role-specific permission (customers.write,
+// orders.write, samples.write, reports.write, reports.archive), and the
+// default role grants deliberately omit these from roles that have no
+// business touching them. This matrix asserts the negative case for
+// every deny so a future route-group drift trips CI instead of silently
+// letting analysts originate or archive primary records.
+func TestRoleEnforcement_WriteDenyMatrix(t *testing.T) {
+	r := setup(t)
+	// Add an analyst so every role the prompt describes is represented.
+	mkUser(t, r, "analyst1", "analyst")
+
+	type denial struct {
+		role         string
+		token        string
+		method, path string
+		body         any
+	}
+
+	analyst := r.login(t, "analyst1", "correct-horse-battery-staple")
+	labtech := r.login(t, "tech1", "correct-horse-battery-staple")
+	dispatch := r.login(t, "dispatch1", "correct-horse-battery-staple")
+	desk := r.login(t, "desk1", "correct-horse-battery-staple")
+
+	// Every mutation an analyst must NOT be able to perform (A1, A2).
+	analystDenies := []denial{
+		{"analyst", analyst, "POST", "/api/customers", map[string]any{"name": "x"}},
+		{"analyst", analyst, "PATCH", "/api/customers/any", map[string]any{"name": "x"}},
+		{"analyst", analyst, "POST", "/api/orders", map[string]any{"total_cents": 100}},
+		{"analyst", analyst, "POST", "/api/orders/any/transitions", map[string]any{"to": "picking"}},
+		{"analyst", analyst, "POST", "/api/orders/any/out-of-stock/plan", map[string]any{}},
+		{"analyst", analyst, "POST", "/api/orders/any/inventory", map[string]any{"sku": "X"}},
+		{"analyst", analyst, "POST", "/api/samples", map[string]any{"test_codes": []string{"GLU"}}},
+		{"analyst", analyst, "POST", "/api/samples/any/transitions", map[string]any{"to": "received"}},
+		{"analyst", analyst, "POST", "/api/samples/any/report", map[string]any{"title": "x"}},
+		{"analyst", analyst, "POST", "/api/reports/any/correct", map[string]any{"reason": "x"}},
+		{"analyst", analyst, "POST", "/api/reports/any/archive", map[string]any{"note": "x"}},
+	}
+
+	// Lab-tech must NOT be able to originate or edit customers/orders (A2, A3).
+	labtechDenies := []denial{
+		{"lab_tech", labtech, "POST", "/api/customers", map[string]any{"name": "x"}},
+		{"lab_tech", labtech, "PATCH", "/api/customers/any", map[string]any{"name": "x"}},
+		{"lab_tech", labtech, "POST", "/api/orders", map[string]any{"total_cents": 100}},
+		{"lab_tech", labtech, "POST", "/api/orders/any/transitions", map[string]any{"to": "picking"}},
+	}
+
+	// Dispatch must NOT be able to write customers or samples/reports (A3).
+	dispatchDenies := []denial{
+		{"dispatch", dispatch, "POST", "/api/customers", map[string]any{"name": "x"}},
+		{"dispatch", dispatch, "PATCH", "/api/customers/any", map[string]any{"name": "x"}},
+		{"dispatch", dispatch, "POST", "/api/samples", map[string]any{"test_codes": []string{"GLU"}}},
+		{"dispatch", dispatch, "POST", "/api/samples/any/report", map[string]any{"title": "x"}},
+		{"dispatch", dispatch, "POST", "/api/reports/any/correct", map[string]any{"reason": "x"}},
+		{"dispatch", dispatch, "POST", "/api/reports/any/archive", map[string]any{"note": "x"}},
+	}
+
+	// Front desk must NOT touch lab write endpoints.
+	deskDenies := []denial{
+		{"front_desk", desk, "POST", "/api/samples", map[string]any{"test_codes": []string{"GLU"}}},
+		{"front_desk", desk, "POST", "/api/reports/any/correct", map[string]any{"reason": "x"}},
+		{"front_desk", desk, "POST", "/api/reports/any/archive", map[string]any{"note": "x"}},
+	}
+
+	all := append([]denial{}, analystDenies...)
+	all = append(all, labtechDenies...)
+	all = append(all, dispatchDenies...)
+	all = append(all, deskDenies...)
+
+	for _, d := range all {
+		t.Run(d.role+" "+d.method+" "+d.path, func(t *testing.T) {
+			rec, _ := r.do(t, d.method, d.path, d.token, d.body)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("%s %s as %s: expected 403, got %d (body=%s)",
+					d.method, d.path, d.role, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestRoleEnforcement_AnalystReadAccessIntact guards against regressing
+// the A1-A3 fix too far: an analyst must still be able to READ the
+// records they build operational reports against, and they must still
+// reach the analytics and CSV export endpoints their role owns.
+func TestRoleEnforcement_AnalystReadAccessIntact(t *testing.T) {
+	r := setup(t)
+	mkUser(t, r, "analyst1", "analyst")
+	tok := r.login(t, "analyst1", "correct-horse-battery-staple")
+
+	reads := []struct{ method, path string }{
+		{"GET", "/api/customers/by-address?zip=00000"},
+		{"GET", "/api/orders"},
+		{"GET", "/api/samples"},
+		{"GET", "/api/reports"},
+		{"GET", "/api/analytics/summary"},
+	}
+	for _, r2 := range reads {
+		rec, _ := r.do(t, r2.method, r2.path, tok, nil)
+		if rec.Code == http.StatusForbidden {
+			t.Fatalf("%s %s as analyst should NOT be 403 (got %d)", r2.method, r2.path, rec.Code)
+		}
+	}
+}
+
 // Cross-user isolation: saved filters can't be listed or deleted by another user.
 func TestCrossUserIsolation_SavedFilters(t *testing.T) {
 	r := setup(t)

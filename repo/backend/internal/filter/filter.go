@@ -65,10 +65,40 @@ type Filter struct {
 // MaxExportSize is the largest page size that can be used for an export.
 // Saved-filter validation requires at least one narrowing criterion (keyword,
 // status, or date range) whenever size exceeds this limit.
+//
+// MaxQueryPage caps how deep a paginated query may walk for a filter that
+// passes Validate. Combined with the narrowing requirement on saved
+// filters (HasNarrowingCriterion), it prevents a caller from dumping the
+// whole dataset by incrementing `page` past the first few screens.
 const (
 	MaxExportSize = 500
 	DefaultSize   = 25
+	MaxQueryPage  = 200
 )
+
+// HasNarrowingCriterion reports whether the filter applies at least one
+// narrowing clause — keyword, status(es), tag(s), priority, date range,
+// or price range. Saved filters and CSV exports require this independent
+// of the page size so callers can't paginate an empty filter to dump the
+// whole table.
+func (f *Filter) HasNarrowingCriterion() bool {
+	if strings.TrimSpace(f.Keyword) != "" {
+		return true
+	}
+	if len(f.Statuses) > 0 || len(f.Tags) > 0 {
+		return true
+	}
+	if strings.TrimSpace(f.Priority) != "" {
+		return true
+	}
+	if f.StartDate != "" || f.EndDate != "" {
+		return true
+	}
+	if f.MinPriceUSD != nil || f.MaxPriceUSD != nil {
+		return true
+	}
+	return false
+}
 
 // ParseDate parses MM/DD/YYYY. Returns a zero time if blank.
 func ParseDate(s string) (time.Time, error) {
@@ -138,15 +168,12 @@ func (f *Filter) Validate(knownStatuses []string) error {
 	if f.Page < 1 || f.Size < 1 || f.Size > MaxExportSize {
 		return ErrBadPage
 	}
+	if f.Page > MaxQueryPage {
+		return ErrBadPage
+	}
 	// "Too broad" check — applies whenever the size pushes toward export.
-	if f.Size > 100 {
-		if strings.TrimSpace(f.Keyword) == "" &&
-			len(f.Statuses) == 0 &&
-			len(f.Tags) == 0 &&
-			f.StartDate == "" && f.EndDate == "" &&
-			f.MinPriceUSD == nil && f.MaxPriceUSD == nil {
-			return ErrTooBroad
-		}
+	if f.Size > 100 && !f.HasNarrowingCriterion() {
+		return ErrTooBroad
 	}
 	return nil
 }

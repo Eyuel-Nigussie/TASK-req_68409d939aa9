@@ -84,6 +84,41 @@ func TestBuildVault_ParsesHexKeys(t *testing.T) {
 	}
 }
 
+func TestBuildVault_RejectsPlaceholderKeyInProd(t *testing.T) {
+	env := map[string]string{"ENC_KEYS": placeholderKey}
+	get := func(k string) string { return env[k] }
+	_, err := BuildVault(get, nil)
+	if !errors.Is(err, ErrPlaceholderKey) {
+		t.Fatalf("expected ErrPlaceholderKey, got %v", err)
+	}
+}
+
+func TestBuildVault_AcceptsPlaceholderKeyInDevModeWithWarning(t *testing.T) {
+	env := map[string]string{"ENC_KEYS": placeholderKey, "OOPS_DEV_MODE": "1"}
+	get := func(k string) string { return env[k] }
+	var logs []string
+	logf := func(f string, a ...any) {
+		_ = a
+		logs = append(logs, f)
+	}
+	v, err := BuildVault(get, logf)
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if v == nil {
+		t.Fatal("nil vault")
+	}
+	var warned bool
+	for _, l := range logs {
+		if strings.Contains(l, "placeholder") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("expected placeholder warning, got %v", logs)
+	}
+}
+
 func TestBuildVault_RejectsMalformedEntry(t *testing.T) {
 	env := map[string]string{"ENC_KEYS": "no-colon-here"}
 	get := func(k string) string { return env[k] }

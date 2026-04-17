@@ -16,7 +16,6 @@ import (
 	"github.com/eaglepoint/oops/backend/internal/geo"
 	"github.com/eaglepoint/oops/backend/internal/httpx"
 	"github.com/eaglepoint/oops/backend/internal/lab"
-	"github.com/eaglepoint/oops/backend/internal/models"
 	"github.com/eaglepoint/oops/backend/internal/store"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -115,109 +114,112 @@ func (s *Server) Register(e *echo.Echo) {
 		return c.JSON(200, map[string]string{"status": "ok"})
 	})
 
-	// Authenticated routes.
-	auth := e.Group("", httpx.RequireAuth(s.Sessions))
-	auth.POST("/api/auth/logout", s.Logout)
-	auth.GET("/api/auth/whoami", s.WhoAmI)
+	// Authenticated routes. Renamed from `auth` to `authGroup` to stop
+	// shadowing the imported `auth` package (A10).
+	authGroup := e.Group("", httpx.RequireAuth(s.Sessions))
+	authGroup.POST("/api/auth/logout", s.Logout)
+	authGroup.GET("/api/auth/whoami", s.WhoAmI)
 
-	// Customers: front desk + admin.
-	fd := auth.Group("", httpx.RequireRoles(models.RoleFrontDesk, models.RoleAdmin, models.RoleAnalyst, models.RoleLabTech, models.RoleDispatch))
-	fd.POST("/api/customers", s.CreateCustomer)
-	fd.GET("/api/customers/:id", s.GetCustomer)
-	fd.GET("/api/customers", s.SearchCustomers)
-	fd.PATCH("/api/customers/:id", s.UpdateCustomer)
-	fd.GET("/api/customers/by-address", s.CustomersByAddress)
+	// All mutations are gated by a single permission pulled from the
+	// admin-configurable catalog. This closes A1-A3: the Analyst role
+	// now has only `*.read` / `analytics.view` / `orders.export` grants,
+	// so every `customers.write` / `orders.write` / `samples.write` /
+	// `reports.*` route below is denied for Analyst (and for any other
+	// role whose catalog entry lacks the permission). A dedicated role
+	// group is NOT layered in front of RequirePermission on mutations
+	// because the permission check is already the tighter constraint —
+	// adding a coarse role filter would only drift out of sync.
+	perm := permissionResolver{s: s.Store}
+	needs := func(permID string) echo.MiddlewareFunc {
+		return httpx.RequirePermission(perm, permID)
+	}
 
-	// Address book (per-user).
-	auth.GET("/api/address-book", s.ListAddressBook)
-	auth.POST("/api/address-book", s.CreateAddressBookEntry)
-	auth.DELETE("/api/address-book/:id", s.DeleteAddressBookEntry)
+	// Customers — reads gated by customers.read, writes by customers.write.
+	authGroup.POST("/api/customers", s.CreateCustomer, needs("customers.write"))
+	authGroup.GET("/api/customers/:id", s.GetCustomer, needs("customers.read"))
+	authGroup.GET("/api/customers", s.SearchCustomers, needs("customers.read"))
+	authGroup.PATCH("/api/customers/:id", s.UpdateCustomer, needs("customers.write"))
+	authGroup.GET("/api/customers/by-address", s.CustomersByAddress, needs("customers.read"))
+
+	// Address book is strictly per-user (owner-scoped at the store layer)
+	// so no extra permission gate is needed beyond authentication.
+	authGroup.GET("/api/address-book", s.ListAddressBook)
+	authGroup.POST("/api/address-book", s.CreateAddressBookEntry)
+	authGroup.DELETE("/api/address-book/:id", s.DeleteAddressBookEntry)
 
 	// Orders.
-	orderRoles := auth.Group("", httpx.RequireRoles(models.RoleFrontDesk, models.RoleAdmin, models.RoleDispatch, models.RoleAnalyst))
-	orderRoles.POST("/api/orders", s.CreateOrder)
-	orderRoles.GET("/api/orders", s.ListOrders)
-	orderRoles.POST("/api/orders/query", s.QueryOrders)
-	orderRoles.GET("/api/orders/by-address", s.OrdersByAddress)
-	orderRoles.GET("/api/orders/:id", s.GetOrder)
-	orderRoles.POST("/api/orders/:id/transitions", s.TransitionOrder)
-	orderRoles.GET("/api/exceptions", s.ListExceptions)
-	orderRoles.POST("/api/orders/:id/out-of-stock/plan", s.PlanOutOfStock)
-	orderRoles.POST("/api/orders/:id/inventory", s.UpdateInventory)
+	authGroup.POST("/api/orders", s.CreateOrder, needs("orders.write"))
+	authGroup.GET("/api/orders", s.ListOrders, needs("orders.read"))
+	authGroup.POST("/api/orders/query", s.QueryOrders, needs("orders.read"))
+	authGroup.GET("/api/orders/by-address", s.OrdersByAddress, needs("orders.read"))
+	authGroup.GET("/api/orders/:id", s.GetOrder, needs("orders.read"))
+	authGroup.POST("/api/orders/:id/transitions", s.TransitionOrder, needs("orders.write"))
+	authGroup.GET("/api/exceptions", s.ListExceptions, needs("orders.read"))
+	authGroup.POST("/api/orders/:id/out-of-stock/plan", s.PlanOutOfStock, needs("orders.write"))
+	authGroup.POST("/api/orders/:id/inventory", s.UpdateInventory, needs("orders.write"))
 
-	// Samples & reports (lab tech + admin).
-	lab := auth.Group("", httpx.RequireRoles(models.RoleLabTech, models.RoleAdmin, models.RoleAnalyst))
-	lab.POST("/api/samples", s.CreateSample)
-	lab.POST("/api/samples/:id/transitions", s.TransitionSample)
-	lab.GET("/api/samples/:id", s.GetSample)
-	lab.GET("/api/samples/:id/test-items", s.ListTestItems)
-	lab.GET("/api/samples", s.ListSamples)
-	lab.POST("/api/samples/:id/report", s.CreateReportDraft)
-	lab.POST("/api/reports/:id/correct", s.CorrectReport)
-	lab.POST("/api/reports/:id/archive", s.ArchiveReport)
-	lab.GET("/api/reports", s.ListReports)
-	lab.GET("/api/reports/archived", s.ListArchivedReports)
-	lab.GET("/api/reports/search", s.SearchReports)
-	lab.GET("/api/reports/:id", s.GetReport)
+	// Samples.
+	authGroup.POST("/api/samples", s.CreateSample, needs("samples.write"))
+	authGroup.POST("/api/samples/:id/transitions", s.TransitionSample, needs("samples.write"))
+	authGroup.GET("/api/samples/:id", s.GetSample, needs("samples.read"))
+	authGroup.GET("/api/samples/:id/test-items", s.ListTestItems, needs("samples.read"))
+	authGroup.GET("/api/samples", s.ListSamples, needs("samples.read"))
 
-	// Dispatch (map pin + geofence + fee).
-	dispatch := auth.Group("", httpx.RequireRoles(models.RoleDispatch, models.RoleAdmin))
-	dispatch.POST("/api/dispatch/validate-pin", s.ValidatePin)
-	dispatch.POST("/api/dispatch/fee-quote", s.QuoteFee)
-	dispatch.GET("/api/dispatch/regions", s.ListRegions)
-	// Map-config read is available to any dispatch-capable user so the
-	// OfflineMap component can hydrate on first render.
-	dispatch.GET("/api/dispatch/map-config", s.GetMapConfig)
+	// Reports.
+	authGroup.POST("/api/samples/:id/report", s.CreateReportDraft, needs("reports.write"))
+	authGroup.POST("/api/reports/:id/correct", s.CorrectReport, needs("reports.write"))
+	authGroup.POST("/api/reports/:id/archive", s.ArchiveReport, needs("reports.archive"))
+	authGroup.GET("/api/reports", s.ListReports, needs("reports.read"))
+	authGroup.GET("/api/reports/archived", s.ListArchivedReports, needs("reports.read"))
+	authGroup.GET("/api/reports/search", s.SearchReports, needs("reports.read"))
+	authGroup.GET("/api/reports/:id", s.GetReport, needs("reports.read"))
 
-	// Saved filters.
-	auth.POST("/api/saved-filters", s.CreateSavedFilter)
-	auth.GET("/api/saved-filters", s.ListSavedFilters)
-	auth.DELETE("/api/saved-filters/:id", s.DeleteSavedFilter)
+	// Dispatch (map pin + geofence + fee). Validate and read ops share
+	// `dispatch.validate`; write operations (regions/routes) sit under
+	// `dispatch.configure` on the admin block below.
+	authGroup.POST("/api/dispatch/validate-pin", s.ValidatePin, needs("dispatch.validate"))
+	authGroup.POST("/api/dispatch/fee-quote", s.QuoteFee, needs("dispatch.validate"))
+	authGroup.GET("/api/dispatch/regions", s.ListRegions, needs("dispatch.validate"))
+	authGroup.GET("/api/dispatch/map-config", s.GetMapConfig, needs("dispatch.validate"))
 
-	// Global search suggestion endpoint.
-	auth.GET("/api/search", s.GlobalSearch)
+	// Saved filters (owner-scoped; no permission beyond auth).
+	authGroup.POST("/api/saved-filters", s.CreateSavedFilter)
+	authGroup.GET("/api/saved-filters", s.ListSavedFilters)
+	authGroup.DELETE("/api/saved-filters/:id", s.DeleteSavedFilter)
 
-	// Admin (users + service regions + reference ranges + route table).
-	admin := auth.Group("", httpx.RequireRoles(models.RoleAdmin))
-	admin.POST("/api/admin/users", s.AdminCreateUser)
-	admin.GET("/api/admin/users", s.AdminListUsers)
-	admin.PATCH("/api/admin/users/:id", s.AdminUpdateUser)
-	admin.PUT("/api/admin/service-regions", s.AdminPutServiceRegions)
-	admin.GET("/api/admin/audit", s.AdminAudit)
-	admin.GET("/api/admin/reference-ranges", s.AdminListRefRanges)
-	admin.PUT("/api/admin/reference-ranges", s.AdminPutRefRanges)
-	admin.GET("/api/admin/route-table", s.AdminListRoutes)
-	admin.PUT("/api/admin/route-table", s.AdminPutRoutes)
-	// Permission administration.
-	admin.GET("/api/admin/permissions", s.AdminListPermissions)
-	admin.GET("/api/admin/role-permissions", s.AdminListRolePermissions)
-	admin.PUT("/api/admin/role-permissions/:role", s.AdminPutRolePermissions)
-	admin.GET("/api/admin/users/:id/permissions", s.AdminListUserPermissions)
-	admin.PUT("/api/admin/users/:id/permissions", s.AdminPutUserPermissions)
+	// Global search suggestion endpoint (read-only, authed only).
+	authGroup.GET("/api/search", s.GlobalSearch)
 
-	// Analytics: gated by the admin-configurable "analytics.view" permission
-	// so an administrator can grant or revoke access at runtime without
-	// shipping code. This is what makes the permission system visible at
-	// the HTTP layer.
-	perm := permissionResolver{s: s.Store}
-	analytics := auth.Group("", httpx.RequirePermission(perm, "analytics.view"))
-	analytics.GET("/api/analytics/orders/status-counts", s.AnalyticsOrderStatus)
-	analytics.GET("/api/analytics/orders/per-day", s.AnalyticsOrdersPerDay)
-	analytics.GET("/api/analytics/samples/status-counts", s.AnalyticsSampleStatus)
-	analytics.GET("/api/analytics/reports/abnormal-rate", s.AnalyticsAbnormalRate)
-	analytics.GET("/api/analytics/exceptions/by-kind", s.AnalyticsExceptionsByKind)
-	analytics.GET("/api/analytics/summary", s.AnalyticsSummary)
+	// Admin endpoints — each gated by a dedicated permission so an
+	// operator can hand out "read the audit log" without handing out
+	// "edit users". admin role has all of them via the seed.
+	authGroup.POST("/api/admin/users", s.AdminCreateUser, needs("admin.users"))
+	authGroup.GET("/api/admin/users", s.AdminListUsers, needs("admin.users"))
+	authGroup.PATCH("/api/admin/users/:id", s.AdminUpdateUser, needs("admin.users"))
+	authGroup.GET("/api/admin/audit", s.AdminAudit, needs("admin.audit"))
+	authGroup.PUT("/api/admin/service-regions", s.AdminPutServiceRegions, needs("dispatch.configure"))
+	authGroup.GET("/api/admin/reference-ranges", s.AdminListRefRanges, needs("admin.reference"))
+	authGroup.PUT("/api/admin/reference-ranges", s.AdminPutRefRanges, needs("admin.reference"))
+	authGroup.GET("/api/admin/route-table", s.AdminListRoutes, needs("dispatch.configure"))
+	authGroup.PUT("/api/admin/route-table", s.AdminPutRoutes, needs("dispatch.configure"))
+	authGroup.GET("/api/admin/permissions", s.AdminListPermissions, needs("admin.users"))
+	authGroup.GET("/api/admin/role-permissions", s.AdminListRolePermissions, needs("admin.users"))
+	authGroup.PUT("/api/admin/role-permissions/:role", s.AdminPutRolePermissions, needs("admin.users"))
+	authGroup.GET("/api/admin/users/:id/permissions", s.AdminListUserPermissions, needs("admin.users"))
+	authGroup.PUT("/api/admin/users/:id/permissions", s.AdminPutUserPermissions, needs("admin.users"))
+	authGroup.PUT("/api/admin/map-config", s.AdminPutMapConfig, needs("admin.settings"))
 
-	// Bounded CSV export, gated by a dedicated permission so an admin
-	// can grant "analyst can view but not export" by removing just this
-	// grant. The handler itself enforces filter.MaxExportSize as a
-	// second line of defense.
-	exporters := auth.Group("", httpx.RequirePermission(perm, "orders.export"))
-	exporters.POST("/api/exports/orders.csv", s.ExportOrdersCSV)
+	// Analytics, under the admin-configurable "analytics.view" permission.
+	authGroup.GET("/api/analytics/orders/status-counts", s.AnalyticsOrderStatus, needs("analytics.view"))
+	authGroup.GET("/api/analytics/orders/per-day", s.AnalyticsOrdersPerDay, needs("analytics.view"))
+	authGroup.GET("/api/analytics/samples/status-counts", s.AnalyticsSampleStatus, needs("analytics.view"))
+	authGroup.GET("/api/analytics/reports/abnormal-rate", s.AnalyticsAbnormalRate, needs("analytics.view"))
+	authGroup.GET("/api/analytics/exceptions/by-kind", s.AnalyticsExceptionsByKind, needs("analytics.view"))
+	authGroup.GET("/api/analytics/summary", s.AnalyticsSummary, needs("analytics.view"))
 
-	// Map-image admin endpoint gated by the `admin.settings` permission.
-	settings := auth.Group("", httpx.RequirePermission(perm, "admin.settings"))
-	settings.PUT("/api/admin/map-config", s.AdminPutMapConfig)
+	// Bounded CSV export — separately granted so an operator can have
+	// `analytics.view` without `orders.export`.
+	authGroup.POST("/api/exports/orders.csv", s.ExportOrdersCSV, needs("orders.export"))
 }
 
 // permissionResolver adapts store.Permissions to httpx.PermissionResolver

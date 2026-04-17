@@ -12,11 +12,17 @@ func TestSample_TerminalStatusRejectsFurther(t *testing.T) {
 	}
 }
 
-func TestEvaluateAll_NoRangeSetReturnsNormal(t *testing.T) {
+func TestEvaluateAll_NoRangeSetReturnsUncategorized(t *testing.T) {
+	// A measurement with no configured reference range is explicitly
+	// "uncategorized", not normal — the UI needs the distinction so it
+	// doesn't advertise an unreviewed result as clinically clean (A13).
 	ms := []Measurement{{TestCode: "UNKNOWN", Value: 999}}
 	out := EvaluateAll(ms, NewRangeSet(), "")
-	if out[0].Flag != FlagNormal {
-		t.Fatalf("no configured range should default to normal, got %s", out[0].Flag)
+	if out[0].Flag != FlagUncategorized {
+		t.Fatalf("no configured range should default to uncategorized, got %s", out[0].Flag)
+	}
+	if out[0].Flag.IsAbnormal() {
+		t.Fatalf("uncategorized must not be treated as abnormal")
 	}
 }
 

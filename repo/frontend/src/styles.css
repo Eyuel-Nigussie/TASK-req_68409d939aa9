@@ -151,6 +151,11 @@ input, select, textarea {
 .abnormal { color: var(--danger); font-weight: 600; }
 .abnormal.cell { background: var(--danger-bg); }
 
+/* Uncategorized: reference range not configured. Shown in neutral grey
+   so a reviewer can tell at a glance that the row is not clinically
+   validated, distinct from a confirmed-normal result. */
+.uncategorized.cell { background: #f3f4f6; }
+
 .timeline {
   display: flex;
   gap: 0;

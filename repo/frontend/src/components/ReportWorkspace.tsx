@@ -64,15 +64,18 @@ export function ReportWorkspace({ report, onUpdated }: Props) {
         </thead>
         <tbody>
           {report.Measurements.map((m, i) => {
-            const abnormal = m.Flag !== "normal" && m.Flag !== "unmeasurable";
+            const neutral = m.Flag === "normal" || m.Flag === "unmeasurable" || m.Flag === "uncategorized";
+            const abnormal = !neutral;
+            const uncategorized = m.Flag === "uncategorized";
+            const rowClass = abnormal ? "abnormal cell" : uncategorized ? "uncategorized cell" : "";
             return (
-              <tr key={i} className={abnormal ? "abnormal cell" : ""}>
+              <tr key={i} className={rowClass}>
                 <td>{m.TestCode}</td>
                 <td className={abnormal ? "abnormal" : ""}>
                   {m.Unmeasurable ? "—" : m.Value}
                 </td>
                 <td>{m.Units || ""}</td>
-                <td className={abnormal ? "abnormal" : ""}>{m.Flag}</td>
+                <td className={abnormal ? "abnormal" : uncategorized ? "muted" : ""}>{m.Flag}</td>
               </tr>
             );
           })}

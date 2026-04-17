@@ -28,6 +28,13 @@ func (s *Server) CreateSavedFilter(c echo.Context) error {
 	if err := body.Filter.Validate(knownStatuses); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	// Saved filters are materialized exports-in-waiting: an analyst who
+	// later runs this filter can paginate it without further narrowing.
+	// Refuse to persist a filter that selects everything, regardless of
+	// the size chosen today.
+	if !body.Filter.HasNarrowingCriterion() {
+		return echo.NewHTTPError(http.StatusBadRequest, filter.ErrTooBroad.Error())
+	}
 	payload, err := json.Marshal(body.Filter)
 	if err != nil {
 		return httpx.WriteError(c, err)

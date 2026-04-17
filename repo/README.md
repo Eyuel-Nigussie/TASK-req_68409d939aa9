@@ -124,8 +124,10 @@ the script integrates cleanly with CI/CD validators.
 
 ## Seeded Credentials
 
-The database is pre-seeded with the following test users on first
-startup (controlled by `SEED_DEMO_USERS=1` in `.env`). Use these
+The database is pre-seeded with the following test users **only when
+`SEED_DEMO_USERS=1` is set in `.env`** (the shipped default is `0` so
+no published credentials are ever installed automatically). Flip the
+flag to `1` for local evaluation to get the table below; use these
 credentials to verify authentication and role-based access controls.
 Passwords satisfy the ≥10-character policy enforced by the backend.
 
@@ -137,5 +139,6 @@ Passwords satisfy the ≥10-character policy enforced by the backend.
 | **Dispatch**   | `dispatch`  | `DispatchTest1!`   | Validate delivery pins against service regions, quote fees via the route table.        |
 | **Analyst**    | `analyst`   | `AnalystTest123!`  | Read-only operational analytics (status counts, time series, abnormal rate).           |
 
-Rotate these passwords (or set `SEED_DEMO_USERS=0` in `.env`) before
-deploying the portal outside a local evaluation environment.
+Keep `SEED_DEMO_USERS=0` for real deployments. When you do enable
+demo seeding for evaluation, rotate each password before the portal
+leaves the isolated network.

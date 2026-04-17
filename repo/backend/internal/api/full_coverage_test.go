@@ -451,17 +451,27 @@ func TestSavedFilters_CreateRejectsBlankName(t *testing.T) {
 func TestSavedFilters_KnownStatusesForEachEntity(t *testing.T) {
 	r := setup(t)
 	tok := r.login(t, "desk1", "correct-horse-battery-staple")
-	entities := map[string][]string{
-		"sample": {"sampling"},
-		"report": {"issued"},
-		"order":  {"placed"},
-		"customer": nil, // entity valid but no status list
+	// Every entity keeps a narrowing criterion — the saved-filter
+	// validator now refuses to persist fully-open filters (A7).
+	cases := []struct {
+		entity string
+		filter map[string]any
+	}{
+		{"sample", map[string]any{"statuses": []string{"sampling"}}},
+		{"report", map[string]any{"statuses": []string{"issued"}}},
+		{"order", map[string]any{"statuses": []string{"placed"}}},
+		// Customer has no status list but a keyword still narrows it.
+		{"customer", map[string]any{"keyword": "jane"}},
 	}
-	for entity, statuses := range entities {
-		body := map[string]any{"name": "n-" + entity, "filter": map[string]any{"entity": entity, "statuses": statuses, "size": 10}}
+	for _, tc := range cases {
+		filter := map[string]any{"entity": tc.entity, "size": 10}
+		for k, v := range tc.filter {
+			filter[k] = v
+		}
+		body := map[string]any{"name": "n-" + tc.entity, "filter": filter}
 		rec, _ := r.do(t, "POST", "/api/saved-filters", tok, body)
 		if rec.Code != http.StatusCreated {
-			t.Errorf("entity=%s: %d %s", entity, rec.Code, rec.Body.String())
+			t.Errorf("entity=%s: %d %s", tc.entity, rec.Code, rec.Body.String())
 		}
 	}
 }
