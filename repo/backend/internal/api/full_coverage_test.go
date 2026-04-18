@@ -71,9 +71,120 @@ func TestLogin_DisabledAccount(t *testing.T) {
 	u, _ := r.m.GetUserByUsername(ctx, "desk1")
 	u.Disabled = true
 	_ = r.m.UpdateUser(ctx, u)
+	// Disabled now returns 401, matching the wrong-password branch, so
+	// an external prober can't distinguish "disabled" from "bad
+	// credentials" via the status code (M3).
 	rec, _ := r.do(t, "POST", "/api/auth/login", "", map[string]string{"username": "desk1", "password": "correct-horse-battery-staple"})
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("disabled should be 403, got %d", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("disabled should be 401, got %d", rec.Code)
+	}
+	// And the lockout counter must tick so the disabled path isn't a
+	// free oracle for valid usernames.
+	for i := 0; i < 5; i++ {
+		r.do(t, "POST", "/api/auth/login", "", map[string]string{"username": "desk1", "password": "wrong-but-long-x"})
+	}
+	rec, _ = r.do(t, "POST", "/api/auth/login", "", map[string]string{"username": "desk1", "password": "correct-horse-battery-staple"})
+	if rec.Code != http.StatusLocked {
+		t.Fatalf("disabled account should still participate in lockout, got %d", rec.Code)
+	}
+}
+
+// ---------- Rotate password / L2 gate ----------
+
+// TestRotatePassword_GateBlocksThenClears pins the L2 invariant: a user
+// flagged MustRotatePassword=true can log in but every non-rotate call
+// 403s until /api/auth/rotate-password succeeds. After rotation the
+// same session is usable without a re-login.
+func TestRotatePassword_GateBlocksThenClears(t *testing.T) {
+	r := setup(t)
+	ctx := context.Background()
+	// Turn admin1 into a demo-style account that must rotate.
+	u, _ := r.m.GetUserByUsername(ctx, "admin1")
+	u.MustRotatePassword = true
+	_ = r.m.UpdateUser(ctx, u)
+
+	tok := r.login(t, "admin1", "correct-horse-battery-staple")
+
+	// A sampling of routes that should all be blocked by the rotation gate.
+	blocked := []struct {
+		method, path string
+	}{
+		{"GET", "/api/customers/x"},
+		{"GET", "/api/orders"},
+		{"GET", "/api/reports"},
+		{"GET", "/api/admin/users"},
+	}
+	for _, b := range blocked {
+		rec, _ := r.do(t, b.method, b.path, tok, nil)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s expected 403 before rotation, got %d", b.method, b.path, rec.Code)
+		}
+	}
+
+	// whoami and logout stay reachable so the SPA can show the
+	// rotation prompt and the user can bail out.
+	rec, body := r.do(t, "GET", "/api/auth/whoami", tok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("whoami should bypass gate, got %d", rec.Code)
+	}
+	if body["must_rotate_password"] != true {
+		t.Fatalf("whoami must expose the flag so the SPA can redirect, got %+v", body)
+	}
+
+	// Wrong old password → 401 (not 403 from the gate, not 400).
+	rec, _ = r.do(t, "POST", "/api/auth/rotate-password", tok, map[string]string{
+		"old_password": "nope-but-long-1", "new_password": "Admin-NewPass-1!",
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong old_password expected 401, got %d", rec.Code)
+	}
+
+	// Reusing the old password is rejected at the handler level.
+	rec, _ = r.do(t, "POST", "/api/auth/rotate-password", tok, map[string]string{
+		"old_password": "correct-horse-battery-staple",
+		"new_password": "correct-horse-battery-staple",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("same old/new expected 400, got %d", rec.Code)
+	}
+
+	// Weak password rejected with a 400 from the policy check.
+	rec, _ = r.do(t, "POST", "/api/auth/rotate-password", tok, map[string]string{
+		"old_password": "correct-horse-battery-staple",
+		"new_password": "aaaaaaaaaa",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("weak new_password expected 400, got %d", rec.Code)
+	}
+
+	// Successful rotation returns 204 and clears the gate.
+	rec, _ = r.do(t, "POST", "/api/auth/rotate-password", tok, map[string]string{
+		"old_password": "correct-horse-battery-staple",
+		"new_password": "Admin-NewPass-1!",
+	})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("successful rotation expected 204, got %d", rec.Code)
+	}
+
+	// The same session should now pass the gate on any normal route.
+	rec, _ = r.do(t, "GET", "/api/admin/users", tok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("after rotation /admin/users should be 200, got %d", rec.Code)
+	}
+
+	// A fresh login with the new credential succeeds and the flag is gone.
+	tok2 := r.login(t, "admin1", "Admin-NewPass-1!")
+	rec, body = r.do(t, "GET", "/api/auth/whoami", tok2, nil)
+	if rec.Code != http.StatusOK || body["must_rotate_password"] != false {
+		t.Fatalf("post-rotation whoami: %d %+v", rec.Code, body)
+	}
+
+	// And the old credential is no longer valid.
+	rec, _ = r.do(t, "POST", "/api/auth/login", "", map[string]string{
+		"username": "admin1", "password": "correct-horse-battery-staple",
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("old credential after rotation expected 401, got %d", rec.Code)
 	}
 }
 
@@ -483,14 +594,14 @@ func TestAdminCreateUser_ValidatesRoleAndPassword(t *testing.T) {
 	admin := r.login(t, "admin1", "correct-horse-battery-staple")
 	// Invalid role.
 	rec, _ := r.do(t, "POST", "/api/admin/users", admin, map[string]any{
-		"username": "new1", "password": "correctpasswordlong", "role": "unknown",
+		"username": "new1", "password": "correct-password-long-1", "role": "unknown",
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for bad role, got %d", rec.Code)
 	}
 	// Empty username.
 	rec, _ = r.do(t, "POST", "/api/admin/users", admin, map[string]any{
-		"username": "", "password": "correctpasswordlong", "role": "analyst",
+		"username": "", "password": "correct-password-long-1", "role": "analyst",
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for blank username, got %d", rec.Code)
@@ -504,14 +615,14 @@ func TestAdminCreateUser_ValidatesRoleAndPassword(t *testing.T) {
 	}
 	// Valid creation.
 	rec, _ = r.do(t, "POST", "/api/admin/users", admin, map[string]any{
-		"username": "new1", "password": "correctpasswordlong", "role": "analyst",
+		"username": "new1", "password": "correct-password-long-1", "role": "analyst",
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
 	// Duplicate is rejected.
 	rec, _ = r.do(t, "POST", "/api/admin/users", admin, map[string]any{
-		"username": "new1", "password": "correctpasswordlong", "role": "analyst",
+		"username": "new1", "password": "correct-password-long-1", "role": "analyst",
 	})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected 409 on dup, got %d", rec.Code)
@@ -540,7 +651,7 @@ func TestAdminUpdateUser_PasswordAndRoleAndDisabled(t *testing.T) {
 	}
 	// Valid update.
 	rec, _ = r.do(t, "PATCH", "/api/admin/users/"+targetID, admin, map[string]any{
-		"role": "analyst", "password": "correctpasswordlong",
+		"role": "analyst", "password": "correct-password-long-1",
 	})
 	if rec.Code != 200 {
 		t.Fatalf("update: %d", rec.Code)

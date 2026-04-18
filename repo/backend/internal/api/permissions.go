@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/eaglepoint/oops/backend/internal/audit"
 	"github.com/eaglepoint/oops/backend/internal/httpx"
 	"github.com/eaglepoint/oops/backend/internal/models"
 	"github.com/labstack/echo/v4"
@@ -54,7 +55,7 @@ func (s *Server) AdminPutRolePermissions(c echo.Context) error {
 	}
 	sess := httpx.CurrentSession(c)
 	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c),
-		"role_permissions", role, "replace", "", before, body.PermissionIDs)
+		audit.EntityRolePermissions, role, "replace", "", before, body.PermissionIDs)
 	return c.JSON(http.StatusOK, map[string]any{"role": role, "permissions": body.PermissionIDs})
 }
 
@@ -83,7 +84,7 @@ func (s *Server) AdminPutUserPermissions(c echo.Context) error {
 	}
 	sess := httpx.CurrentSession(c)
 	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c),
-		"user_permissions", userID, "replace", "", before, body.PermissionIDs)
+		audit.EntityUserPermissions, userID, "replace", "", before, body.PermissionIDs)
 	return c.JSON(http.StatusOK, map[string]any{"user_id": userID, "permissions": body.PermissionIDs})
 }
 

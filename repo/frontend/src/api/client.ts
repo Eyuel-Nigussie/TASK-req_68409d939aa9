@@ -73,20 +73,33 @@ function workstationId(): string {
 
 export const api = {
   login(username: string, password: string) {
-    return request<{ token: string; user: { id: string; username: string; role: string }; expires_at: string }>(
-      "POST",
-      "/api/auth/login",
-      { username, password },
-    );
+    return request<{
+      token: string;
+      user: { id: string; username: string; role: string; must_rotate_password?: boolean };
+      expires_at: string;
+      must_rotate_password?: boolean;
+    }>("POST", "/api/auth/login", { username, password });
   },
   logout() {
     return request<void>("POST", "/api/auth/logout");
   },
   whoami() {
-    return request<{ id: string; username: string; role: string; expires_at: string }>(
-      "GET",
-      "/api/auth/whoami",
-    );
+    return request<{
+      id: string;
+      username: string;
+      role: string;
+      expires_at: string;
+      must_rotate_password?: boolean;
+    }>("GET", "/api/auth/whoami");
+  },
+  // rotatePassword clears the must_rotate_password gate for sessions
+  // seeded with the shared demo credential (L2). On success the same
+  // session token can access the rest of the API without a re-login.
+  rotatePassword(oldPassword: string, newPassword: string) {
+    return request<void>("POST", "/api/auth/rotate-password", {
+      old_password: oldPassword,
+      new_password: newPassword,
+    });
   },
   searchGlobal(q: string) {
     return request<Array<{ ID: string; Label: string; Kind: string; Score: number }>>(

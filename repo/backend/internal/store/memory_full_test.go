@@ -128,10 +128,12 @@ func TestMemory_Orders_EventAppendAndList(t *testing.T) {
 	if err := m.AppendOrderEvent(ctx, order.Event{ID: "e1", OrderID: "o1", To: order.StatusPicking}); err != nil {
 		t.Fatal(err)
 	}
-	// List with pagination offset past the end returns nil.
+	// List with pagination offset past the end returns an empty
+	// slice — the JSON envelope is always an array so the SPA can
+	// `.length` and `.map` the response without a null-check.
 	out, _ := m.ListOrders(ctx, nil, nil, nil, 10, 100)
-	if out != nil {
-		t.Fatalf("expected nil past offset, got %v", out)
+	if out == nil || len(out) != 0 {
+		t.Fatalf("expected empty slice past offset, got %v", out)
 	}
 	// Limit-less list returns everything.
 	out, _ = m.ListOrders(ctx, nil, nil, nil, 0, 0)
@@ -151,15 +153,16 @@ func TestMemory_Samples_CRUDAndList(t *testing.T) {
 	if err := m.UpdateSample(ctx, lab.Sample{ID: "ghost"}); err != ErrNotFound {
 		t.Fatalf("expected NotFound, got %v", err)
 	}
-	// List with offset past end → nil.
+	// List with offset past end → empty slice (never nil, so JSON
+	// marshals to `[]` and the SPA can iterate without a null check).
 	out, _ := m.ListSamples(ctx, nil, 10, 999)
-	if out != nil {
-		t.Fatalf("expected nil, got %v", out)
+	if out == nil || len(out) != 0 {
+		t.Fatalf("expected empty slice past offset, got %v", out)
 	}
-	// List filtered by an unknown status returns nothing.
+	// List filtered by an unknown status returns an empty slice.
 	out, _ = m.ListSamples(ctx, []string{"unknown"}, 10, 0)
-	if out != nil {
-		t.Fatalf("expected nil, got %v", out)
+	if out == nil || len(out) != 0 {
+		t.Fatalf("expected empty slice, got %v", out)
 	}
 }
 
@@ -186,10 +189,10 @@ func TestMemory_Reports_LookupAndCorrection(t *testing.T) {
 	if len(found) != 1 {
 		t.Fatalf("expected 1 search hit, got %d", len(found))
 	}
-	// ListReports with pagination offset.
+	// ListReports with pagination offset returns an empty slice.
 	out, _ := m.ListReports(ctx, 0, 100)
-	if out != nil {
-		t.Fatalf("expected nil, got %v", out)
+	if out == nil || len(out) != 0 {
+		t.Fatalf("expected empty slice, got %v", out)
 	}
 }
 
@@ -221,10 +224,10 @@ func TestMemory_Audit_ListLimitAndEntityFilter(t *testing.T) {
 	if len(out) != 2 {
 		t.Fatalf("expected 2, got %d", len(out))
 	}
-	// Entity filter that matches nothing returns nil.
+	// Entity filter that matches nothing returns an empty slice.
 	out, _ = m.ListAudit(ctx, "nothing", "", 0)
-	if out != nil {
-		t.Fatalf("expected nil, got %v", out)
+	if out == nil || len(out) != 0 {
+		t.Fatalf("expected empty slice for no-match filter, got %v", out)
 	}
 }
 

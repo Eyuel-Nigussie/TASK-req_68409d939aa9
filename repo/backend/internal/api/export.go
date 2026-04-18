@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/eaglepoint/oops/backend/internal/audit"
 	"github.com/eaglepoint/oops/backend/internal/filter"
 	"github.com/eaglepoint/oops/backend/internal/httpx"
 	"github.com/eaglepoint/oops/backend/internal/order"
@@ -45,7 +46,12 @@ func (s *Server) ExportOrdersCSV(c echo.Context) error {
 		SortBy:   body.SortBy,
 		SortDesc: body.SortDesc,
 		Limit:    limit,
-		Offset:   (body.Page - 1) * body.Size,
+		// Offset walks in page-sized strides of the *capped* limit, not
+		// body.Size. Using body.Size here (M5) would let a caller pass
+		// Size=400, Page=10 and jump to offset 3,600 while still
+		// returning a 500-row window — inconsistent with the "hard cap"
+		// semantics the handler documents.
+		Offset: (body.Page - 1) * limit,
 	}
 	if body.StartDate != "" {
 		t, err := filter.ParseDate(body.StartDate)
@@ -79,7 +85,7 @@ func (s *Server) ExportOrdersCSV(c echo.Context) error {
 
 	sess := httpx.CurrentSession(c)
 	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c),
-		"order", "export", "export", "", nil,
+		audit.EntityOrder, "export", "export", "", nil,
 		map[string]any{
 			"filter":   body,
 			"returned": len(rows),

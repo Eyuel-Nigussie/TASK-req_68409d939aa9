@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/eaglepoint/oops/backend/internal/audit"
 	"github.com/eaglepoint/oops/backend/internal/httpx"
 	"github.com/eaglepoint/oops/backend/internal/store"
 	"github.com/labstack/echo/v4"
@@ -56,7 +57,7 @@ func (s *Server) AdminPutMapConfig(c echo.Context) error {
 	}
 	sess := httpx.CurrentSession(c)
 	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c),
-		"system_settings", SettingMapImageURL, "put", "",
+		audit.EntitySystemSettings, SettingMapImageURL, "put", "",
 		map[string]string{"value": before},
 		map[string]string{"value": url})
 	return c.JSON(http.StatusOK, map[string]any{"map_image_url": url})

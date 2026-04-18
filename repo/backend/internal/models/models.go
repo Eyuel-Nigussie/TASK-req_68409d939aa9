@@ -22,14 +22,22 @@ const (
 var AllRoles = []Role{RoleFrontDesk, RoleLabTech, RoleDispatch, RoleAnalyst, RoleAdmin}
 
 // User is an authenticated operator.
+//
+// MustRotatePassword is set when the account was provisioned with a
+// shared/demo password (e.g. by SeedDemoUsers) and the operator has
+// not yet chosen their own. When true, the auth layer refuses all API
+// requests for the session except /api/auth/rotate-password,
+// /api/auth/logout, and /api/auth/whoami so the published demo
+// credential cannot be used in production without being rotated (L2).
 type User struct {
-	ID           string
-	Username     string
-	Role         Role
-	PasswordHash string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	Disabled     bool
+	ID                 string
+	Username           string
+	Role               Role
+	PasswordHash       string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	Disabled           bool
+	MustRotatePassword bool
 }
 
 // Customer represents a person who uses the lab or orders from fulfillment.

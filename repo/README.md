@@ -142,3 +142,20 @@ Passwords satisfy the ≥10-character policy enforced by the backend.
 Keep `SEED_DEMO_USERS=0` for real deployments. When you do enable
 demo seeding for evaluation, rotate each password before the portal
 leaves the isolated network.
+
+Every demo account ships with `must_rotate_password=true`. The auth
+layer lets those accounts log in but rejects every API call with 403
+("password rotation required") until the operator calls:
+
+```
+POST /api/auth/rotate-password
+Authorization: Bearer <session>
+{
+  "old_password": "AdminTest123!",
+  "new_password": "<chosen value satisfying the policy>"
+}
+```
+
+Only `/api/auth/whoami`, `/api/auth/logout`, and `/api/auth/rotate-password`
+are reachable until the rotation succeeds, so a published credential
+from this README cannot be used against a running portal.

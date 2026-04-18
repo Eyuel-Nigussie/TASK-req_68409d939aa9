@@ -59,8 +59,10 @@ func TestMemory_ListSavedFilters_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != nil {
-		t.Fatalf("expected nil for empty owner, got %v", out)
+	// Empty owner yields an empty slice (not nil) so the JSON envelope
+	// marshals to `[]`, keeping frontend `.map`/`.length` calls safe.
+	if out == nil || len(out) != 0 {
+		t.Fatalf("expected empty slice for empty owner, got %v", out)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eaglepoint/oops/backend/internal/audit"
 	"github.com/eaglepoint/oops/backend/internal/httpx"
 	"github.com/eaglepoint/oops/backend/internal/lab"
 	"github.com/eaglepoint/oops/backend/internal/models"
@@ -99,7 +100,7 @@ func (s *Server) CreateSample(c echo.Context) error {
 		return httpx.WriteError(c, err)
 	}
 	sess := httpx.CurrentSession(c)
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "sample", smp.ID, "create", "", nil, smp)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntitySample, smp.ID, "create", "", nil, smp)
 	// Return the sample payload under the same top-level shape that
 	// already-deployed tests expect (ID, Status, …) while adding the
 	// normalized test_items for clients that care.
@@ -149,7 +150,7 @@ func (s *Server) TransitionSample(c echo.Context) error {
 	if err := s.Store.UpdateSample(ctx, smp); err != nil {
 		return httpx.WriteError(c, err)
 	}
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "sample", smp.ID, "transition", "", before, smp)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntitySample, smp.ID, "transition", "", before, smp)
 	return c.JSON(http.StatusOK, smp)
 }
 
@@ -246,10 +247,10 @@ func (s *Server) CreateReportDraft(c echo.Context) error {
 	if smp.Status == lab.SampleInTesting {
 		if _, terr := smp.Transition(lab.SampleReported, sess.UserID, now); terr == nil {
 			_ = s.Store.UpdateSample(ctx, smp)
-			_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "sample", smp.ID, "transition", "auto-on-report", nil, smp)
+			_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntitySample, smp.ID, "transition", "auto-on-report", nil, smp)
 		}
 	}
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "report", r.ID, "create", "", nil, r)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityReport, r.ID, "create", "", nil, r)
 	return c.JSON(http.StatusCreated, r)
 }
 
@@ -283,7 +284,7 @@ func (s *Server) CorrectReport(c echo.Context) error {
 	if err := s.Store.ReplaceWithCorrection(ctx, prior, next); err != nil {
 		return httpx.WriteError(c, err)
 	}
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "report", next.ID, "correct", body.Reason, prior, next)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityReport, next.ID, "correct", body.Reason, prior, next)
 	return c.JSON(http.StatusCreated, next)
 }
 
@@ -346,7 +347,7 @@ func (s *Server) ArchiveReport(c echo.Context) error {
 	if err := s.Store.UpdateReport(ctx, r); err != nil {
 		return httpx.WriteError(c, err)
 	}
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "report", r.ID, "archive", body.Note, before, r)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityReport, r.ID, "archive", body.Note, before, r)
 	return c.JSON(http.StatusOK, r)
 }
 

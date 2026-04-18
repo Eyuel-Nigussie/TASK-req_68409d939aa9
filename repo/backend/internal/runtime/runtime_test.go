@@ -71,6 +71,34 @@ func TestBuildVault_EphemeralKeyInDevMode(t *testing.T) {
 	}
 }
 
+// TestBuildVault_EphemeralKeyIsNonDeterministic locks the M1 fix in
+// place: if the dev-mode path regresses to a deterministic constant,
+// two successive BuildVault calls would share a key and each could
+// decrypt the other's ciphertext. That would make the "data NOT
+// readable after restart" warning a lie and leak customer PII to
+// anyone holding this repo.
+func TestBuildVault_EphemeralKeyIsNonDeterministic(t *testing.T) {
+	env := map[string]string{"OOPS_DEV_MODE": "1"}
+	get := func(k string) string { return env[k] }
+	discard := func(string, ...any) {}
+
+	a, err := BuildVault(get, discard)
+	if err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+	b, err := BuildVault(get, discard)
+	if err != nil {
+		t.Fatalf("second build: %v", err)
+	}
+	ct, err := a.Encrypt("patient-123")
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if _, err := b.Decrypt(ct); err == nil {
+		t.Fatal("second dev vault decrypted the first vault's ciphertext — dev key is not ephemeral")
+	}
+}
+
 func TestBuildVault_ParsesHexKeys(t *testing.T) {
 	// Two 32-byte keys in hex.
 	env := map[string]string{"ENC_KEYS": "1:" + strings.Repeat("ab", 32) + ",2:" + strings.Repeat("cd", 32)}
@@ -281,6 +309,46 @@ func TestSeedDemoUsers_InstallsAllFiveRoles(t *testing.T) {
 			t.Errorf("user %s: role %q != %q", du.Username, created[du.Username], du.Role)
 		}
 	}
+}
+
+// TestSeedDemoUsers_ForcesMustRotate pins the L2 invariant: every
+// account installed through SeedDemoUsers (the SEED_DEMO_USERS=1
+// path) ships with MustRotatePassword=true, so the README-published
+// shared credentials cannot be used against a live deployment without
+// being rotated first.
+func TestSeedDemoUsers_ForcesMustRotate(t *testing.T) {
+	s := &fakeSeedStore{hasAdmin: false}
+	seen := []models.User{}
+	wrap := &capturingSeedStore{inner: s, sink: &seen}
+	if err := SeedDemoUsers(context.Background(), wrap, func() time.Time { return time.Unix(0, 0) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) == 0 {
+		t.Fatal("no demo users were created")
+	}
+	for _, u := range seen {
+		if !u.MustRotatePassword {
+			t.Errorf("demo user %q seeded without MustRotatePassword=true", u.Username)
+		}
+	}
+}
+
+// capturingSeedStore records every User the seeder creates so tests can
+// assert on the full payload (not just username/role).
+type capturingSeedStore struct {
+	inner *fakeSeedStore
+	sink  *[]models.User
+}
+
+func (c *capturingSeedStore) GetUserByUsername(ctx context.Context, name string) (models.User, error) {
+	return c.inner.GetUserByUsername(ctx, name)
+}
+func (c *capturingSeedStore) CreateUser(ctx context.Context, u models.User) error {
+	*c.sink = append(*c.sink, u)
+	return c.inner.CreateUser(ctx, u)
+}
+func (c *capturingSeedStore) ReplaceRegions(ctx context.Context, rs []geo.Region) error {
+	return c.inner.ReplaceRegions(ctx, rs)
 }
 
 // badHashStore simulates an auth.HashPassword failure by returning an

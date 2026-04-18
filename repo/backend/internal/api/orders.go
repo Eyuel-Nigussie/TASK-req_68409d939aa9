@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/eaglepoint/oops/backend/internal/audit"
 	"github.com/eaglepoint/oops/backend/internal/filter"
 	"github.com/eaglepoint/oops/backend/internal/httpx"
 	"github.com/eaglepoint/oops/backend/internal/order"
@@ -58,7 +60,7 @@ func (s *Server) CreateOrder(c echo.Context) error {
 	sess := httpx.CurrentSession(c)
 	// Audit snapshot redacts the encrypted delivery street.
 	redacted := orderRedact(o)
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "order", o.ID, "create", "", nil, redacted)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityOrder, o.ID, "create", "", nil, redacted)
 
 	// If any line item ships with backordered=true the system should raise
 	// the OOS exception at the moment of creation, not later.
@@ -66,7 +68,7 @@ func (s *Server) CreateOrder(c echo.Context) error {
 		if err := s.Store.PutException(ctx, *ex); err != nil {
 			return httpx.WriteError(c, err)
 		}
-		_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "order_exception", ex.OrderID, "flag", ex.Description, nil, ex)
+		_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityOrderException, ex.OrderID, "flag", ex.Description, nil, ex)
 	}
 	// Decrypt for response; audit already stored the redacted version.
 	o.DeliveryStreet = body.DeliveryStreet
@@ -209,9 +211,18 @@ func (s *Server) OrdersByAddress(c echo.Context) error {
 		}
 		o.DeliveryStreet = plain
 		out = append(out, o)
+		if len(out) >= addressLookupMaxRows {
+			break
+		}
 	}
 	return c.JSON(http.StatusOK, out)
 }
+
+// addressLookupMaxRows caps the by-address handlers (orders and
+// customers) so a shared city/zip can't be used as a bulk-dump channel.
+// Callers who need more than this should use the paginated filter
+// endpoints — which already refuse overly broad queries.
+const addressLookupMaxRows = 200
 
 // TransitionOrder advances the state machine and appends an event.
 func (s *Server) TransitionOrder(c echo.Context) error {
@@ -242,29 +253,79 @@ func (s *Server) TransitionOrder(c echo.Context) error {
 	if err := s.Store.AppendOrderEvent(ctx, ev); err != nil {
 		return httpx.WriteError(c, err)
 	}
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "order", o.ID, "transition", body.Reason, before, o)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityOrder, o.ID, "transition", body.Reason, before, o)
 	return c.JSON(http.StatusOK, o)
 }
 
-// ListExceptions returns the current exception queue. Before returning it
-// runs two automatic detectors so the list is always current from the
-// operator's perspective:
-//  1. Picking-timeout: orders stuck in "picking" for more than the
-//     configured threshold (30 min).
-//  2. Out-of-stock: orders with at least one backordered line item.
-//
-// Newly detected exceptions are persisted and audited.
+// Tunables for the L5 throttle.
+const (
+	// exceptionSweepInterval is the minimum wall-clock gap between two
+	// detector sweeps. A refresh inside the window reads from the
+	// exception store without re-scanning orders.
+	exceptionSweepInterval = 60 * time.Second
+	// exceptionSweepMaxOrders bounds the work done by any single sweep
+	// so a very large orders table cannot make one request O(all).
+	exceptionSweepMaxOrders = 200
+)
+
+// exceptionSweepState tracks when the detectors last ran so a burst of
+// reads in quick succession doesn't redo O(orders) work per request.
+type exceptionSweepState struct {
+	mu     sync.Mutex
+	lastAt time.Time
+}
+
+// ListExceptions returns the current exception queue. The two detectors
+// (picking-timeout, out-of-stock) are expensive to run — they each
+// scan a window of recent orders — so they are throttled by
+// exceptionSweepInterval (L5). A request inside the cool-down window
+// returns the queue as it stands in the store without re-running the
+// detectors. Write-path events (CreateOrder, UpdateInventory,
+// PlanOutOfStock) still raise exceptions synchronously, so legitimate
+// events are not hidden by the throttle; it only prevents an operator
+// mashing the refresh button from thrashing the DB.
 func (s *Server) ListExceptions(c echo.Context) error {
 	ctx := c.Request().Context()
-	pickings, err := s.Store.ListOrders(ctx, []string{string(order.StatusPicking)}, nil, nil, 500, 0)
+	if s.shouldSweepExceptions() {
+		if err := s.sweepExceptions(c); err != nil {
+			return httpx.WriteError(c, err)
+		}
+	}
+	ex, err := s.Store.ListExceptions(ctx)
 	if err != nil {
 		return httpx.WriteError(c, err)
 	}
-	// We also need to inspect non-picking orders for backordered items —
-	// an order can be flagged OOS even before picking begins.
-	allRecent, err := s.Store.ListOrders(ctx, nil, nil, nil, 500, 0)
+	return c.JSON(http.StatusOK, ex)
+}
+
+// shouldSweepExceptions returns true at most once per
+// exceptionSweepInterval. It also updates the timestamp so concurrent
+// readers share a single sweep per window.
+func (s *Server) shouldSweepExceptions() bool {
+	now := s.Clock()
+	s.exceptionSweep.mu.Lock()
+	defer s.exceptionSweep.mu.Unlock()
+	if !s.exceptionSweep.lastAt.IsZero() && now.Sub(s.exceptionSweep.lastAt) < exceptionSweepInterval {
+		return false
+	}
+	s.exceptionSweep.lastAt = now
+	return true
+}
+
+// sweepExceptions runs the automatic detectors against a bounded window
+// of orders. Newly detected exceptions are persisted and audited exactly
+// as the previous inline-on-read logic did.
+func (s *Server) sweepExceptions(c echo.Context) error {
+	ctx := c.Request().Context()
+	pickings, err := s.Store.ListOrders(ctx, []string{string(order.StatusPicking)}, nil, nil, exceptionSweepMaxOrders, 0)
 	if err != nil {
-		return httpx.WriteError(c, err)
+		return err
+	}
+	// Non-picking orders are inspected for backordered items — OOS can
+	// flag before picking begins — but only the most recent window.
+	allRecent, err := s.Store.ListOrders(ctx, nil, nil, nil, exceptionSweepMaxOrders, 0)
+	if err != nil {
+		return err
 	}
 	now := s.Clock()
 	sess := httpx.CurrentSession(c)
@@ -286,24 +347,20 @@ func (s *Server) ListExceptions(c echo.Context) error {
 			return err
 		}
 		existing[key] = struct{}{}
-		_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "order_exception", ex.OrderID, "flag", ex.Description, nil, ex)
+		_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityOrderException, ex.OrderID, "flag", ex.Description, nil, ex)
 		return nil
 	}
 	for _, o := range pickings {
 		if err := record(order.DetectPickingTimeout(&o, now)); err != nil {
-			return httpx.WriteError(c, err)
+			return err
 		}
 	}
 	for _, o := range allRecent {
 		if err := record(order.DetectOutOfStock(&o, now)); err != nil {
-			return httpx.WriteError(c, err)
+			return err
 		}
 	}
-	ex, err := s.Store.ListExceptions(ctx)
-	if err != nil {
-		return httpx.WriteError(c, err)
-	}
-	return c.JSON(http.StatusOK, ex)
+	return nil
 }
 
 // UpdateInventory is the inventory-signal endpoint. When picking staff
@@ -337,7 +394,7 @@ func (s *Server) UpdateInventory(c echo.Context) error {
 		return httpx.WriteError(c, err)
 	}
 	sess := httpx.CurrentSession(c)
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "order", o.ID, "inventory", body.Note, before, o)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityOrder, o.ID, "inventory", body.Note, before, o)
 
 	// Immediately run the OOS detector so the exception queue is updated
 	// without waiting for the operator to navigate to it. This satisfies
@@ -346,7 +403,7 @@ func (s *Server) UpdateInventory(c echo.Context) error {
 		if err := s.Store.PutException(ctx, *ex); err != nil {
 			return httpx.WriteError(c, err)
 		}
-		_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "order_exception", ex.OrderID, "flag", ex.Description, nil, ex)
+		_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityOrderException, ex.OrderID, "flag", ex.Description, nil, ex)
 	}
 	return c.JSON(http.StatusOK, o)
 }
@@ -375,9 +432,9 @@ func (s *Server) PlanOutOfStock(c echo.Context) error {
 		if err := s.Store.PutException(ctx, ex); err != nil {
 			return httpx.WriteError(c, err)
 		}
-		_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "order_exception", orderID, "flag", plan.Description, nil, ex)
+		_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityOrderException, orderID, "flag", plan.Description, nil, ex)
 	}
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "order", orderID, "plan_oos", "",
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityOrder, orderID, "plan_oos", "",
 		map[string]any{"available": body.Available, "backordered": body.Backordered}, plan)
 	return c.JSON(http.StatusOK, plan)
 }

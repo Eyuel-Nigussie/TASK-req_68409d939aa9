@@ -8,13 +8,19 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- =============== Users & roles ===============
 
 CREATE TABLE users (
-    id            TEXT PRIMARY KEY,
-    username      TEXT NOT NULL UNIQUE,
-    role          TEXT NOT NULL CHECK (role IN ('front_desk','lab_tech','dispatch','analyst','admin')),
-    password_hash TEXT NOT NULL,
-    disabled      BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id                     TEXT PRIMARY KEY,
+    username               TEXT NOT NULL UNIQUE,
+    role                   TEXT NOT NULL CHECK (role IN ('front_desk','lab_tech','dispatch','analyst','admin')),
+    password_hash          TEXT NOT NULL,
+    disabled               BOOLEAN NOT NULL DEFAULT FALSE,
+    -- must_rotate_password is set when the account was provisioned with
+    -- a shared/demo password (SEED_DEMO_USERS=1). The auth layer refuses
+    -- all API calls from sessions belonging to such accounts except
+    -- /api/auth/rotate-password, /api/auth/logout, and /api/auth/whoami
+    -- so a leaked README password cannot be used in production (L2).
+    must_rotate_password   BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Authorization is expressed via a permission catalog plus per-role grants

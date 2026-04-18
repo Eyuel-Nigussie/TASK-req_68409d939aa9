@@ -229,7 +229,7 @@ func (m *Memory) SearchCustomers(_ context.Context, query string, limit int) ([]
 func (m *Memory) FindByAddress(_ context.Context, _street, city, zip string) ([]models.Customer, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []models.Customer
+	out := make([]models.Customer, 0)
 	norm := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 	for _, c := range m.customers {
 		if zip != "" && norm(c.ZIP) != norm(zip) {
@@ -256,7 +256,7 @@ func (m *Memory) CreateAddress(_ context.Context, a models.AddressBookEntry) err
 func (m *Memory) ListAddresses(_ context.Context, ownerID string) ([]models.AddressBookEntry, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []models.AddressBookEntry
+	out := make([]models.AddressBookEntry, 0)
 	for _, a := range m.addresses {
 		if a.OwnerID == ownerID {
 			out = append(out, a)
@@ -343,7 +343,10 @@ func (m *Memory) ListOrders(_ context.Context, statuses []string, from, to *int6
 	for _, s := range statuses {
 		statusSet[s] = struct{}{}
 	}
-	var out []order.Order
+	// Pre-size with zero length so the JSON envelope is always `[]` —
+	// a nil slice would marshal to `null` and crash any SPA consumer
+	// that treats the response as an array.
+	out := make([]order.Order, 0, len(m.orders))
 	for _, o := range m.orders {
 		if len(statusSet) > 0 {
 			if _, ok := statusSet[string(o.Status)]; !ok {
@@ -360,8 +363,8 @@ func (m *Memory) ListOrders(_ context.Context, statuses []string, from, to *int6
 		out = append(out, o)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].PlacedAt.After(out[j].PlacedAt) })
-	if offset > len(out) {
-		return nil, nil
+	if offset >= len(out) {
+		return []order.Order{}, nil
 	}
 	out = out[offset:]
 	if limit > 0 && len(out) > limit {
@@ -463,7 +466,7 @@ func (m *Memory) OrdersByAddress(_ context.Context, city, zip string) ([]order.O
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	norm := func(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
-	var out []order.Order
+	out := make([]order.Order, 0)
 	for _, o := range m.orders {
 		if zip != "" && norm(o.DeliveryZIP) != norm(zip) {
 			continue
@@ -534,7 +537,7 @@ func (m *Memory) ListSamples(_ context.Context, statuses []string, limit, offset
 	for _, s := range statuses {
 		set[s] = struct{}{}
 	}
-	var out []lab.Sample
+	out := make([]lab.Sample, 0, len(m.samples))
 	for _, s := range m.samples {
 		if len(set) > 0 {
 			if _, ok := set[string(s.Status)]; !ok {
@@ -544,8 +547,8 @@ func (m *Memory) ListSamples(_ context.Context, statuses []string, limit, offset
 		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CollectedAt.After(out[j].CollectedAt) })
-	if offset > len(out) {
-		return nil, nil
+	if offset >= len(out) {
+		return []lab.Sample{}, nil
 	}
 	out = out[offset:]
 	if limit > 0 && len(out) > limit {
@@ -644,8 +647,8 @@ func (m *Memory) ListReports(_ context.Context, limit, offset int) ([]lab.Report
 		out = append(out, r)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].IssuedAt.After(out[j].IssuedAt) })
-	if offset > len(out) {
-		return nil, nil
+	if offset >= len(out) {
+		return []lab.Report{}, nil
 	}
 	out = out[offset:]
 	if limit > 0 && len(out) > limit {
@@ -659,7 +662,7 @@ func (m *Memory) ListReports(_ context.Context, limit, offset int) ([]lab.Report
 func (m *Memory) ListArchivedReports(_ context.Context) ([]lab.Report, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []lab.Report
+	out := make([]lab.Report, 0)
 	for _, r := range m.reports {
 		if r.IsArchived() {
 			out = append(out, r)
@@ -687,7 +690,7 @@ func (m *Memory) CreateSavedFilter(_ context.Context, f models.SavedFilter) erro
 func (m *Memory) ListSavedFilters(_ context.Context, ownerID string) ([]models.SavedFilter, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []models.SavedFilter
+	out := make([]models.SavedFilter, 0)
 	for _, f := range m.savedFilters {
 		if f.OwnerID == ownerID {
 			out = append(out, f)
@@ -1030,7 +1033,7 @@ func (m *Memory) AppendAudit(_ context.Context, e models.AuditEntry) error {
 func (m *Memory) ListAudit(_ context.Context, entity, entityID string, limit int) ([]models.AuditEntry, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var out []models.AuditEntry
+	out := make([]models.AuditEntry, 0)
 	for _, e := range m.audit {
 		if entity != "" && e.Entity != entity {
 			continue

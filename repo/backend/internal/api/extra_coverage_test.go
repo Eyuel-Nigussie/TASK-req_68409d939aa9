@@ -200,6 +200,64 @@ func TestPickingTimeout_ScaleDoesNotDuplicate(t *testing.T) {
 	}
 }
 
+// TestListExceptions_SweepThrottled verifies the L5 throttle: after a
+// first ListExceptions call runs the detectors and populates the
+// queue, a second call inside the cool-down window must NOT rescan
+// orders. We assert this indirectly: seed a fresh "stuck" order AFTER
+// the first call, then call again with the clock advanced by less
+// than exceptionSweepInterval. The new order's picking-timeout must
+// not appear because the throttle skips the sweep.
+func TestListExceptions_SweepThrottled(t *testing.T) {
+	r := setup(t)
+	desk := r.login(t, "desk1", "correct-horse-battery-staple")
+	base := time.Unix(1_700_000_000, 0)
+
+	// First stuck order, eligible for detection.
+	_ = r.m.CreateOrder(context.Background(), order.Order{
+		ID: "stuck-A", Status: order.StatusPicking, PlacedAt: base, UpdatedAt: base,
+	})
+	r.srv.Clock = func() time.Time { return base.Add(31 * time.Minute) }
+
+	// First call sweeps and records the exception for stuck-A.
+	rec, _ := r.do(t, "GET", "/api/exceptions", desk, nil)
+	if rec.Code != 200 {
+		t.Fatalf("first call: %d", rec.Code)
+	}
+	exs, _ := r.m.ListExceptions(context.Background())
+	initial := len(exs)
+	if initial == 0 {
+		t.Fatal("expected stuck-A to raise an exception on the first call")
+	}
+
+	// Add stuck-B AFTER the first sweep. The throttle should suppress
+	// detection on a second call within the cool-down window.
+	_ = r.m.CreateOrder(context.Background(), order.Order{
+		ID: "stuck-B", Status: order.StatusPicking, PlacedAt: base, UpdatedAt: base,
+	})
+	// Advance clock by less than the throttle interval.
+	r.srv.Clock = func() time.Time { return base.Add(31*time.Minute + exceptionSweepInterval/2) }
+
+	rec, _ = r.do(t, "GET", "/api/exceptions", desk, nil)
+	if rec.Code != 200 {
+		t.Fatalf("second call: %d", rec.Code)
+	}
+	exs, _ = r.m.ListExceptions(context.Background())
+	if len(exs) != initial {
+		t.Fatalf("throttle skipped: exception count grew from %d to %d without the cooldown elapsing", initial, len(exs))
+	}
+
+	// Advance past the interval — the next call must detect stuck-B.
+	r.srv.Clock = func() time.Time { return base.Add(31*time.Minute + 2*exceptionSweepInterval) }
+	rec, _ = r.do(t, "GET", "/api/exceptions", desk, nil)
+	if rec.Code != 200 {
+		t.Fatalf("third call: %d", rec.Code)
+	}
+	exs, _ = r.m.ListExceptions(context.Background())
+	if len(exs) <= initial {
+		t.Fatalf("after cooldown elapsed, stuck-B should have been detected (was %d, still %d)", initial, len(exs))
+	}
+}
+
 // TestOrderSearch_QualityIncludesOrdersInGlobalResults is a backend-side
 // quality check that the global search path surfaces orders even when the
 // keyword matches a status or tag rather than a name.

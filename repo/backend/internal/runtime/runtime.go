@@ -129,8 +129,14 @@ func seedUsers(ctx context.Context, s SeedStore, users []DemoUser, now func() ti
 			Username:     du.Username,
 			Role:         du.Role,
 			PasswordHash: hash,
-			CreatedAt:    now(),
-			UpdatedAt:    now(),
+			// Demo passwords are printed in README.md. Force every demo
+			// account to rotate before it can issue any API call beyond
+			// /api/auth/rotate-password, /api/auth/logout, and
+			// /api/auth/whoami so a copy-pasted credential from the docs
+			// can't be used against a live deployment (L2).
+			MustRotatePassword: true,
+			CreatedAt:          now(),
+			UpdatedAt:          now(),
 		}
 		if err := s.CreateUser(ctx, u); err != nil {
 			return fmt.Errorf("create %s: %w", du.Username, err)
@@ -210,8 +216,16 @@ func BuildVault(getenv func(string) string, logf func(string, ...any)) (*crypto.
 		if getenv("OOPS_DEV_MODE") != "1" {
 			return nil, ErrMissingKeys
 		}
-		logf("WARNING: OOPS_DEV_MODE=1 and ENC_KEYS unset — generating an ephemeral development key. Data encrypted now will NOT be readable after restart.")
-		return crypto.NewVault(map[uint16][]byte{1: crypto.DeriveKey([]byte("dev-only-not-for-production-use"))})
+		// Generate a *real* ephemeral key: 32 random bytes per boot.
+		// Using a deterministic constant here would allow anyone with
+		// repo access to decrypt data written in dev mode, undermining
+		// the "data is lost on restart" promise in the log line below.
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			return nil, fmt.Errorf("generate ephemeral dev key: %w", err)
+		}
+		logf("WARNING: OOPS_DEV_MODE=1 and ENC_KEYS unset — generated a random ephemeral key for this process. Data encrypted now will NOT be readable after restart.")
+		return crypto.NewVault(map[uint16][]byte{1: key})
 	}
 	if strings.TrimSpace(raw) == placeholderKey {
 		if getenv("OOPS_DEV_MODE") != "1" {

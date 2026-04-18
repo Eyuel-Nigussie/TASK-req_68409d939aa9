@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/eaglepoint/oops/backend/internal/audit"
 	"github.com/eaglepoint/oops/backend/internal/filter"
 	"github.com/eaglepoint/oops/backend/internal/httpx"
 	"github.com/eaglepoint/oops/backend/internal/models"
@@ -52,7 +53,7 @@ func (s *Server) CreateSavedFilter(c echo.Context) error {
 	if err := s.Store.CreateSavedFilter(ctx, f); err != nil {
 		return httpx.WriteError(c, err)
 	}
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "saved_filter", f.ID, "create", "",
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntitySavedFilter, f.ID, "create", "",
 		nil, map[string]any{"name": f.Name, "key": f.Key})
 	return c.JSON(http.StatusCreated, f)
 }
@@ -75,7 +76,7 @@ func (s *Server) DeleteSavedFilter(c echo.Context) error {
 	if err := s.Store.DeleteSavedFilter(ctx, sess.UserID, id); err != nil {
 		return httpx.WriteError(c, err)
 	}
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "saved_filter", id, "delete", "", nil, nil)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntitySavedFilter, id, "delete", "", nil, nil)
 	return c.NoContent(http.StatusNoContent)
 }
 

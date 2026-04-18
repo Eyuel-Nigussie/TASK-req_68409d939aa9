@@ -25,14 +25,14 @@ type unmarshalable struct{ Ch chan int }
 
 func TestLog_MarshalBeforeErrorBubbles(t *testing.T) {
 	l := New(&badStore{}, func() time.Time { return time.Unix(1, 0) })
-	if err := l.Log(context.Background(), "u", "ws", time.Time{}, "e", "id", "a", "", unmarshalable{Ch: make(chan int)}, nil); err == nil {
+	if err := l.Log(context.Background(), "u", "ws", time.Time{}, Entity("e"), "id", "a", "", unmarshalable{Ch: make(chan int)}, nil); err == nil {
 		t.Fatal("expected marshal error")
 	}
 }
 
 func TestLog_MarshalAfterErrorBubbles(t *testing.T) {
 	l := New(&badStore{}, nil)
-	if err := l.Log(context.Background(), "u", "ws", time.Time{}, "e", "id", "a", "", nil, unmarshalable{Ch: make(chan int)}); err == nil {
+	if err := l.Log(context.Background(), "u", "ws", time.Time{}, Entity("e"), "id", "a", "", nil, unmarshalable{Ch: make(chan int)}); err == nil {
 		t.Fatal("expected marshal error")
 	}
 }
@@ -40,7 +40,7 @@ func TestLog_MarshalAfterErrorBubbles(t *testing.T) {
 func TestLog_AppendErrorBubbles(t *testing.T) {
 	sentinel := errors.New("append failed")
 	l := New(&badStore{err: sentinel}, nil)
-	err := l.Log(context.Background(), "u", "ws", time.Time{}, "e", "id", "a", "", nil, nil)
+	err := l.Log(context.Background(), "u", "ws", time.Time{}, Entity("e"), "id", "a", "", nil, nil)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("expected %v, got %v", sentinel, err)
 	}

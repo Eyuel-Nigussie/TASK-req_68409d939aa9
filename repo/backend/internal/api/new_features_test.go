@@ -181,6 +181,75 @@ func TestExportOrdersCSV_RequiresPermission(t *testing.T) {
 	}
 }
 
+// TestExportOrdersCSV_OffsetRespectsCap pins the M5 fix in place: the
+// handler's page-size/page-offset math must use the CAPPED limit, not
+// the caller-supplied body.Size. If a future refactor regresses and
+// walks offsets in body.Size-sized strides again, this test exposes it
+// by seeding many matching orders and asserting that the first page
+// returns at most MaxExportSize rows regardless of what body.Size says.
+func TestExportOrdersCSV_OffsetRespectsCap(t *testing.T) {
+	r := setup(t)
+	desk := r.login(t, "desk1", "correct-horse-battery-staple")
+	admin := r.login(t, "admin1", "correct-horse-battery-staple")
+
+	// Seed a handful of orders that all share the "placed" status so the
+	// narrowing-clause check passes with a known count.
+	for i := 0; i < 5; i++ {
+		rec, _ := r.do(t, "POST", "/api/orders", desk, map[string]any{
+			"total_cents":   100 + i,
+			"priority":      "standard",
+			"delivery_city": "Metro",
+			"delivery_zip":  "10001",
+		})
+		if rec.Code != 201 {
+			t.Fatalf("seed order %d: %d %s", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Page=1, Size=500 — the handler caps the returned window to
+	// MaxExportSize (500 from filter package). The test asserts we never
+	// emit more data rows than the cap regardless of Size. Counting is
+	// done on the CSV body rather than on the filter.MaxExportSize
+	// constant so that raising the cap does not silently break this
+	// invariant.
+	rec, _ := r.do(t, "POST", "/api/exports/orders.csv", admin, map[string]any{
+		"statuses": []string{"placed"},
+		"size":     500,
+		"page":     1,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export: %d %s", rec.Code, rec.Body.String())
+	}
+	// Body has one header line plus one row per order. The seed count is
+	// small (5) so we simply assert the row count matches the seed and
+	// never exceeds the cap.
+	lines := strings.Split(strings.TrimRight(rec.Body.String(), "\n"), "\n")
+	// header + 5 orders = 6 lines
+	if len(lines) != 6 {
+		t.Fatalf("expected 6 lines (header + 5 rows), got %d: %v", len(lines), lines)
+	}
+
+	// Page=2 with a caller-supplied Size=400 must not escape the cap
+	// either. The store has only 5 rows so page 2 at offset=500 should
+	// produce the header plus zero data rows (or all 5 if a regression
+	// walks offset as body.Size*0 = 0 — both are not the pathological
+	// "jumped mid-cap" case we're guarding). The concrete assertion is:
+	// row count on page 2 must be <= cap.
+	rec, _ = r.do(t, "POST", "/api/exports/orders.csv", admin, map[string]any{
+		"statuses": []string{"placed"},
+		"size":     400,
+		"page":     2,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export page 2: %d %s", rec.Code, rec.Body.String())
+	}
+	lines = strings.Split(strings.TrimRight(rec.Body.String(), "\n"), "\n")
+	// Page 2 at a correctly-capped offset=500 is past the end → only header.
+	if len(lines) != 1 {
+		t.Fatalf("page 2 should be past the end (header only), got %d lines: %v", len(lines), lines)
+	}
+}
+
 // --- CORS tightening --------------------------------------------------
 
 func TestCORS_ParsesAllowedOriginsEnv(t *testing.T) {

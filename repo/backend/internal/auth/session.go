@@ -12,13 +12,20 @@ import (
 var ErrSessionInvalid = errors.New("session invalid or expired")
 
 // Session represents an authenticated user on a workstation.
+//
+// MustRotatePassword mirrors the flag on the User record at the moment
+// of issuance. When true, a middleware denies every authenticated
+// request except the small allowlist needed to change the password.
+// The flag is cleared on a successful rotation; the session continues
+// to be valid for its remaining TTL without forcing a re-login (L2).
 type Session struct {
-	Token     string
-	UserID    string
-	Username  string
-	Role      string
-	IssuedAt  time.Time
-	ExpiresAt time.Time
+	Token              string
+	UserID             string
+	Username           string
+	Role               string
+	IssuedAt           time.Time
+	ExpiresAt          time.Time
+	MustRotatePassword bool
 }
 
 // SessionStore is a goroutine-safe, in-memory session cache. A single-node
@@ -56,23 +63,42 @@ func NewToken() (string, error) {
 
 // Issue creates a new session for the given user and returns the token.
 func (s *SessionStore) Issue(userID, username, role string) (*Session, error) {
+	return s.IssueWithFlags(userID, username, role, false)
+}
+
+// IssueWithFlags is the extended form of Issue used by the login
+// handler to propagate per-user flags (currently MustRotatePassword)
+// into the session record.
+func (s *SessionStore) IssueWithFlags(userID, username, role string, mustRotate bool) (*Session, error) {
 	tok, err := NewToken()
 	if err != nil {
 		return nil, err
 	}
 	now := s.now()
 	sess := &Session{
-		Token:     tok,
-		UserID:    userID,
-		Username:  username,
-		Role:      role,
-		IssuedAt:  now,
-		ExpiresAt: now.Add(s.ttl),
+		Token:              tok,
+		UserID:             userID,
+		Username:           username,
+		Role:               role,
+		IssuedAt:           now,
+		ExpiresAt:          now.Add(s.ttl),
+		MustRotatePassword: mustRotate,
 	}
 	s.mu.Lock()
 	s.byTk[tok] = sess
 	s.mu.Unlock()
 	return sess, nil
+}
+
+// ClearMustRotate flips MustRotatePassword off on the live session so
+// subsequent requests pass the rotation gate. Called after a successful
+// /api/auth/rotate-password so the user doesn't have to log in again.
+func (s *SessionStore) ClearMustRotate(token string) {
+	s.mu.Lock()
+	if sess, ok := s.byTk[token]; ok {
+		sess.MustRotatePassword = false
+	}
+	s.mu.Unlock()
 }
 
 // Lookup returns the session for a token, or ErrSessionInvalid.

@@ -71,14 +71,14 @@ func TestLockout_Check_StateButNoLock(t *testing.T) {
 // where we can't stub without `monkey patching`; we keep it as a smoke
 // test that HashPassword returns an encoded string.
 func TestHashPassword_StructureAndCompare(t *testing.T) {
-	hash, err := HashPassword("correctpasswordlong")
+	hash, err := HashPassword("correct-password-long-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ComparePassword(hash, "correctpasswordlong"); err != nil {
+	if err := ComparePassword(hash, "correct-password-long-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := ComparePassword(hash, "wrongpassword-long"); err != ErrMismatched {
+	if err := ComparePassword(hash, "wrong-password-long-1"); err != ErrMismatched {
 		t.Fatalf("expected mismatch, got %v", err)
 	}
 }

@@ -14,9 +14,21 @@ func TestValidatePolicy(t *testing.T) {
 		{"empty", "", ErrPasswordBlank},
 		{"spaces only", "         ", ErrPasswordBlank},
 		{"nine chars", "abcdefghi", ErrPasswordTooShort},
-		{"exactly ten", "abcdefghij", nil},
-		{"long enough", strings.Repeat("x", 64), nil},
-		{"unicode ten runes", "π€αβγδεζηθ", nil},
+		// Length met but only one class (letters) — rejected by L1.
+		{"ten letters one class", "abcdefghij", ErrPasswordTooSimple},
+		{"long single class letters", "thequickbrownfox", ErrPasswordTooSimple},
+		// Length met but single character repeated — rejected.
+		{"repeated single char", strings.Repeat("x", 64), ErrPasswordTooSimple},
+		// Unicode-only (all symbols in our classification) — rejected as
+		// single class. The test exists to pin behavior; a realistic
+		// operator password would combine classes.
+		{"unicode ten runes one class", "π€αβγδεζηθ", ErrPasswordTooSimple},
+		// Common-leak entries rejected even at length.
+		{"common entry", "Password123", ErrPasswordTooCommon},
+		// Happy paths: ≥2 classes and not in blocklist.
+		{"letters plus digits", "Horse1Battery2", nil},
+		{"letters plus symbols", "correct-horse-battery-staple", nil},
+		{"three classes", "Admin-Demo-12!", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -29,7 +41,7 @@ func TestValidatePolicy(t *testing.T) {
 }
 
 func TestHashAndCompare_RoundTrip(t *testing.T) {
-	pw := "correcthorsebatterystaple"
+	pw := "correct-horse-battery-staple"
 	hash, err := HashPassword(pw)
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
@@ -43,11 +55,11 @@ func TestHashAndCompare_RoundTrip(t *testing.T) {
 }
 
 func TestHashAndCompare_WrongPassword(t *testing.T) {
-	hash, err := HashPassword("correcthorsebattery")
+	hash, err := HashPassword("correct-horse-battery")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ComparePassword(hash, "correcthorsebatteryX"); err != ErrMismatched {
+	if err := ComparePassword(hash, "correct-horse-batteryX"); err != ErrMismatched {
 		t.Fatalf("expected ErrMismatched, got %v", err)
 	}
 }

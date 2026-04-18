@@ -12,8 +12,12 @@ export function Dashboard() {
   async function refresh() {
     try {
       const [exc, ord] = await Promise.all([api.listExceptions(), api.listOrders({ limit: 10 })]);
-      setExceptions(exc);
-      setRecent(ord);
+      // Defend against servers / stores that encode an empty list as
+      // JSON `null`: coerce to [] so `.length` and `.map` below always
+      // have an array to work against. Without this a null response
+      // crashes the render and blanks the page.
+      setExceptions(Array.isArray(exc) ? exc : []);
+      setRecent(Array.isArray(ord) ? ord : []);
     } catch {
       // noop - we'll retry on next mount.
     }

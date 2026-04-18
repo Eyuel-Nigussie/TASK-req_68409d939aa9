@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/eaglepoint/oops/backend/internal/audit"
 	"github.com/eaglepoint/oops/backend/internal/auth"
 	"github.com/eaglepoint/oops/backend/internal/geo"
 	"github.com/eaglepoint/oops/backend/internal/httpx"
@@ -50,7 +51,7 @@ func (s *Server) AdminCreateUser(c echo.Context) error {
 		return httpx.WriteError(c, err)
 	}
 	sess := httpx.CurrentSession(c)
-	_ = s.Audit.Log(c.Request().Context(), sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "user", u.ID, "create", "",
+	_ = s.Audit.Log(c.Request().Context(), sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityUser, u.ID, "create", "",
 		nil, map[string]any{"username": u.Username, "role": u.Role})
 	return c.JSON(http.StatusCreated, map[string]any{
 		"id": u.ID, "username": u.Username, "role": u.Role,
@@ -123,7 +124,7 @@ func (s *Server) AdminPutServiceRegions(c echo.Context) error {
 		return httpx.WriteError(c, err)
 	}
 	sess := httpx.CurrentSession(c)
-	_ = s.Audit.Log(c.Request().Context(), sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "service_regions", "all", "replace", "", nil, body.Regions)
+	_ = s.Audit.Log(c.Request().Context(), sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityServiceRegions, "all", "replace", "", nil, body.Regions)
 	return c.JSON(http.StatusOK, map[string]any{"count": len(regions)})
 }
 
@@ -183,7 +184,7 @@ func (s *Server) AdminUpdateUser(c echo.Context) error {
 		return httpx.WriteError(c, err)
 	}
 	sess := httpx.CurrentSession(c)
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "user", u.ID, "update", "",
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityUser, u.ID, "update", "",
 		before, map[string]any{"role": u.Role, "disabled": u.Disabled})
 	return c.JSON(http.StatusOK, map[string]any{"id": u.ID, "role": u.Role, "disabled": u.Disabled})
 }
@@ -229,7 +230,7 @@ func (s *Server) AdminPutRefRanges(c echo.Context) error {
 		return httpx.WriteError(c, err)
 	}
 	sess := httpx.CurrentSession(c)
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "reference_ranges", "all", "replace", "", before, body.Ranges)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityReferenceRanges, "all", "replace", "", before, body.Ranges)
 	return c.JSON(http.StatusOK, map[string]any{"count": len(body.Ranges)})
 }
 
@@ -269,7 +270,7 @@ func (s *Server) AdminPutRoutes(c echo.Context) error {
 		return httpx.WriteError(c, err)
 	}
 	sess := httpx.CurrentSession(c)
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "route_table", "all", "replace", "", before, body.Routes)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityRouteTable, "all", "replace", "", before, body.Routes)
 	return c.JSON(http.StatusOK, map[string]any{"count": len(body.Routes)})
 }
 

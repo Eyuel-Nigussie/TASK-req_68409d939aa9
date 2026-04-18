@@ -45,9 +45,9 @@ func mapErr(err error) error {
 
 func (p *Postgres) CreateUser(ctx context.Context, u models.User) error {
 	_, err := p.db.ExecContext(ctx, `
-	    INSERT INTO users (id, username, role, password_hash, disabled, created_at, updated_at)
-	    VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		u.ID, u.Username, string(u.Role), u.PasswordHash, u.Disabled, u.CreatedAt, u.UpdatedAt)
+	    INSERT INTO users (id, username, role, password_hash, disabled, must_rotate_password, created_at, updated_at)
+	    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		u.ID, u.Username, string(u.Role), u.PasswordHash, u.Disabled, u.MustRotatePassword, u.CreatedAt, u.UpdatedAt)
 	return mapErr(err)
 }
 
@@ -55,9 +55,9 @@ func (p *Postgres) GetUserByUsername(ctx context.Context, name string) (models.U
 	var u models.User
 	var role string
 	err := p.db.QueryRowContext(ctx, `
-	    SELECT id, username, role, password_hash, disabled, created_at, updated_at
+	    SELECT id, username, role, password_hash, disabled, must_rotate_password, created_at, updated_at
 	    FROM users WHERE username = $1`, name).
-		Scan(&u.ID, &u.Username, &role, &u.PasswordHash, &u.Disabled, &u.CreatedAt, &u.UpdatedAt)
+		Scan(&u.ID, &u.Username, &role, &u.PasswordHash, &u.Disabled, &u.MustRotatePassword, &u.CreatedAt, &u.UpdatedAt)
 	u.Role = models.Role(role)
 	return u, mapErr(err)
 }
@@ -66,16 +66,16 @@ func (p *Postgres) GetUserByID(ctx context.Context, id string) (models.User, err
 	var u models.User
 	var role string
 	err := p.db.QueryRowContext(ctx, `
-	    SELECT id, username, role, password_hash, disabled, created_at, updated_at
+	    SELECT id, username, role, password_hash, disabled, must_rotate_password, created_at, updated_at
 	    FROM users WHERE id = $1`, id).
-		Scan(&u.ID, &u.Username, &role, &u.PasswordHash, &u.Disabled, &u.CreatedAt, &u.UpdatedAt)
+		Scan(&u.ID, &u.Username, &role, &u.PasswordHash, &u.Disabled, &u.MustRotatePassword, &u.CreatedAt, &u.UpdatedAt)
 	u.Role = models.Role(role)
 	return u, mapErr(err)
 }
 
 func (p *Postgres) ListUsers(ctx context.Context) ([]models.User, error) {
 	rows, err := p.db.QueryContext(ctx, `
-	    SELECT id, username, role, password_hash, disabled, created_at, updated_at
+	    SELECT id, username, role, password_hash, disabled, must_rotate_password, created_at, updated_at
 	    FROM users ORDER BY username`)
 	if err != nil {
 		return nil, mapErr(err)
@@ -85,7 +85,7 @@ func (p *Postgres) ListUsers(ctx context.Context) ([]models.User, error) {
 	for rows.Next() {
 		var u models.User
 		var role string
-		if err := rows.Scan(&u.ID, &u.Username, &role, &u.PasswordHash, &u.Disabled, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &role, &u.PasswordHash, &u.Disabled, &u.MustRotatePassword, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, err
 		}
 		u.Role = models.Role(role)
@@ -96,9 +96,9 @@ func (p *Postgres) ListUsers(ctx context.Context) ([]models.User, error) {
 
 func (p *Postgres) UpdateUser(ctx context.Context, u models.User) error {
 	res, err := p.db.ExecContext(ctx, `
-	    UPDATE users SET role=$2, password_hash=$3, disabled=$4, updated_at=$5
+	    UPDATE users SET role=$2, password_hash=$3, disabled=$4, must_rotate_password=$5, updated_at=$6
 	    WHERE id=$1`,
-		u.ID, string(u.Role), u.PasswordHash, u.Disabled, u.UpdatedAt)
+		u.ID, string(u.Role), u.PasswordHash, u.Disabled, u.MustRotatePassword, u.UpdatedAt)
 	if err != nil {
 		return mapErr(err)
 	}
@@ -219,7 +219,7 @@ func (p *Postgres) ListAddresses(ctx context.Context, ownerID string) ([]models.
 		return nil, mapErr(err)
 	}
 	defer rows.Close()
-	var out []models.AddressBookEntry
+	out := make([]models.AddressBookEntry, 0)
 	for rows.Next() {
 		var a models.AddressBookEntry
 		if err := rows.Scan(&a.ID, &a.OwnerID, &a.CustomerID, &a.Label, &a.Street, &a.City, &a.State, &a.ZIP, &a.Lat, &a.Lng, &a.CreatedAt); err != nil {
@@ -411,7 +411,7 @@ func (p *Postgres) ListOrders(ctx context.Context, statuses []string, from, to *
 		return nil, mapErr(err)
 	}
 	defer rows.Close()
-	var out []order.Order
+	out := make([]order.Order, 0)
 	for rows.Next() {
 		var o order.Order
 		var status string
@@ -494,7 +494,7 @@ func (p *Postgres) QueryOrders(ctx context.Context, q OrderQuery) ([]order.Order
 		return nil, 0, mapErr(err)
 	}
 	defer rows.Close()
-	var out []order.Order
+	out := make([]order.Order, 0)
 	for rows.Next() {
 		var o order.Order
 		var status string
@@ -526,7 +526,7 @@ func (p *Postgres) OrdersByAddress(ctx context.Context, city, zip string) ([]ord
 		return nil, mapErr(err)
 	}
 	defer rows.Close()
-	var out []order.Order
+	out := make([]order.Order, 0)
 	for rows.Next() {
 		var o order.Order
 		var status string
@@ -555,7 +555,7 @@ func (p *Postgres) ListExceptions(ctx context.Context) ([]order.Exception, error
 		return nil, mapErr(err)
 	}
 	defer rows.Close()
-	var out []order.Exception
+	out := make([]order.Exception, 0)
 	for rows.Next() {
 		var ex order.Exception
 		if err := rows.Scan(&ex.OrderID, &ex.Kind, &ex.DetectedAt, &ex.Description); err != nil {
@@ -634,7 +634,7 @@ func (p *Postgres) ListSamples(ctx context.Context, statuses []string, limit, of
 		return nil, mapErr(err)
 	}
 	defer rows.Close()
-	var out []lab.Sample
+	out := make([]lab.Sample, 0)
 	for rows.Next() {
 		var s lab.Sample
 		var status string
@@ -772,7 +772,7 @@ func scanSingleReport(row *sql.Row) (lab.Report, error) {
 }
 
 func scanReports(rows *sql.Rows) ([]lab.Report, error) {
-	var out []lab.Report
+	out := make([]lab.Report, 0)
 	for rows.Next() {
 		var r lab.Report
 		var status string
@@ -827,7 +827,7 @@ func (p *Postgres) ListSavedFilters(ctx context.Context, ownerID string) ([]mode
 		return nil, mapErr(err)
 	}
 	defer rows.Close()
-	var out []models.SavedFilter
+	out := make([]models.SavedFilter, 0)
 	for rows.Next() {
 		var f models.SavedFilter
 		if err := rows.Scan(&f.ID, &f.OwnerID, &f.Name, &f.Payload, &f.Key, &f.CreatedAt); err != nil {

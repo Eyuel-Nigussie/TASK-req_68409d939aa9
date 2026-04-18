@@ -64,7 +64,7 @@ function Shell() {
       <div className="layout">
         <nav className="sidenav card" aria-label="Main">
           <NavLink to="/" end className={({ isActive }) => (isActive ? "active" : "")}>Dashboard</NavLink>
-          {can(["front_desk", "admin", "analyst", "dispatch", "lab_tech"]) && (
+          {can(["front_desk", "admin", "analyst", "dispatch"]) && (
             <NavLink to="/customers" className={({ isActive }) => (isActive ? "active" : "")}>Customers</NavLink>
           )}
           {can(["front_desk", "admin", "analyst", "dispatch"]) && (

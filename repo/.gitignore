@@ -20,3 +20,8 @@ coverage.out
 # Local secrets
 .env
 .env.local
+# start.sh rotates the historical placeholder ENC_KEYS on first run and
+# drops the previous value at .env.bak; it is a plaintext key file and
+# must never be committed.
+.env.bak
+.env.tmp

@@ -33,6 +33,11 @@ type Server struct {
 	RouteTable *geo.RouteTable
 	// ranges is populated by AdminPutRefRanges, or seeded at startup.
 	ranges *lab.RangeSet
+
+	// exceptionSweep throttles the work that ListExceptions does on
+	// each request (L5). Without it the handler would scan up to 1000
+	// orders on every operator refresh. See sweepExceptions.
+	exceptionSweep exceptionSweepState
 }
 
 // New constructs a Server with the given dependencies.
@@ -95,13 +100,23 @@ func (s *Server) ReloadRefRanges(ctx context.Context) error {
 func (s *Server) Register(e *echo.Echo) {
 	e.Use(middleware.Recover())
 	e.Use(httpx.StructuredLogging(nil))
+	allowed := parseAllowedOrigins()
+	// Surface wildcard CORS on startup (L4). Operators who explicitly
+	// set ALLOWED_ORIGINS=* should see a clear journal entry so the
+	// choice is traceable post-deploy.
+	for _, o := range allowed {
+		if o == "*" {
+			log.Printf("[cors] ALLOWED_ORIGINS=* — cross-origin requests from ANY origin are accepted. This is only appropriate for short-lived local demos.")
+			break
+		}
+	}
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		// Default origins target the bundled SPA on the LAN. Operators
 		// can override by setting ALLOWED_ORIGINS="http://host:port,..."
 		// at deploy time. A wildcard is intentionally NOT the default
 		// so a stray cross-origin script cannot ride a session token
 		// stored in localStorage via an authenticated fetch.
-		AllowOrigins:  parseAllowedOrigins(),
+		AllowOrigins:  allowed,
 		AllowMethods:  []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:  []string{"Authorization", "Content-Type", "X-Workstation", "X-Workstation-Time", "X-Request-ID"},
 		ExposeHeaders: []string{"X-Request-ID"},
@@ -115,10 +130,21 @@ func (s *Server) Register(e *echo.Echo) {
 	})
 
 	// Authenticated routes. Renamed from `auth` to `authGroup` to stop
-	// shadowing the imported `auth` package (A10).
-	authGroup := e.Group("", httpx.RequireAuth(s.Sessions))
+	// shadowing the imported `auth` package (A10). The rotation gate
+	// (L2) is chained right after RequireAuth so every authenticated
+	// route — including the permission-gated ones below — participates
+	// without each handler having to opt in.
+	authGroup := e.Group("",
+		httpx.RequireAuth(s.Sessions),
+		httpx.RequirePasswordRotation(
+			"/api/auth/rotate-password",
+			"/api/auth/logout",
+			"/api/auth/whoami",
+		),
+	)
 	authGroup.POST("/api/auth/logout", s.Logout)
 	authGroup.GET("/api/auth/whoami", s.WhoAmI)
+	authGroup.POST("/api/auth/rotate-password", s.RotatePassword)
 
 	// All mutations are gated by a single permission pulled from the
 	// admin-configurable catalog. This closes A1-A3: the Analyst role

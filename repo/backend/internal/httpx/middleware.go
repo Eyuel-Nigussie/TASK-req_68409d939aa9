@@ -84,6 +84,35 @@ func RequirePermission(resolver PermissionResolver, permID string) echo.Middlewa
 	}
 }
 
+// RequirePasswordRotation blocks requests from sessions whose
+// MustRotatePassword flag is set, except for a small allowlist of paths
+// needed to change the password or log out. Must be chained after
+// RequireAuth. Sessions seeded via SEED_DEMO_USERS=1 are flagged so a
+// published demo credential cannot be used against a live deployment
+// without first rotating (L2).
+func RequirePasswordRotation(allowedPaths ...string) echo.MiddlewareFunc {
+	allow := make(map[string]struct{}, len(allowedPaths))
+	for _, p := range allowedPaths {
+		allow[p] = struct{}{}
+	}
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			sess := CurrentSession(c)
+			if sess == nil {
+				return next(c)
+			}
+			if !sess.MustRotatePassword {
+				return next(c)
+			}
+			if _, ok := allow[c.Path()]; ok {
+				return next(c)
+			}
+			return echo.NewHTTPError(http.StatusForbidden,
+				"password rotation required: call /api/auth/rotate-password before any other API")
+		}
+	}
+}
+
 // SecurityHeaders applies defensive headers appropriate to a LAN-only deploy.
 func SecurityHeaders() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {

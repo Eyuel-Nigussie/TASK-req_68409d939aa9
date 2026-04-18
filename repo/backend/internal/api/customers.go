@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/eaglepoint/oops/backend/internal/audit"
 	"github.com/eaglepoint/oops/backend/internal/httpx"
 	"github.com/eaglepoint/oops/backend/internal/models"
 	"github.com/labstack/echo/v4"
@@ -56,7 +57,7 @@ func (s *Server) CreateCustomer(c echo.Context) error {
 		return httpx.WriteError(c, err)
 	}
 	sess := httpx.CurrentSession(c)
-	_ = s.Audit.Log(c.Request().Context(), sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "customer", cu.ID, "create", "", nil, redactCustomer(cu))
+	_ = s.Audit.Log(c.Request().Context(), sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityCustomer, cu.ID, "create", "", nil, redactCustomer(cu))
 	return c.JSON(http.StatusCreated, s.customerView(cu))
 }
 
@@ -142,7 +143,7 @@ func (s *Server) UpdateCustomer(c echo.Context) error {
 		return httpx.WriteError(c, err)
 	}
 	sess := httpx.CurrentSession(c)
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "customer", existing.ID, "update", "", before, redactCustomer(existing))
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityCustomer, existing.ID, "update", "", before, redactCustomer(existing))
 	return c.JSON(http.StatusOK, s.customerView(existing))
 }
 
@@ -178,6 +179,11 @@ func (s *Server) CustomersByAddress(c echo.Context) error {
 		// we just verified in case the vault is swapped in the future.
 		v["street"] = plain
 		views = append(views, v)
+		// Bound the response so a dense shared city/zip can't be used
+		// to dump thousands of customer rows in a single request (L3).
+		if len(views) >= addressLookupMaxRows {
+			break
+		}
 	}
 	return c.JSON(http.StatusOK, views)
 }

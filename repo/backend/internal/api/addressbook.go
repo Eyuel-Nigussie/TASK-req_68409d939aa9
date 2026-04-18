@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/eaglepoint/oops/backend/internal/audit"
 	"github.com/eaglepoint/oops/backend/internal/httpx"
 	"github.com/eaglepoint/oops/backend/internal/models"
 	"github.com/labstack/echo/v4"
@@ -69,7 +70,7 @@ func (s *Server) CreateAddressBookEntry(c echo.Context) error {
 	}
 	// Record an audit entry with encrypted fields redacted, so the log
 	// tracks the operation without copying plaintext addresses into it.
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "address_book", a.ID, "create", "",
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityAddressBook, a.ID, "create", "",
 		nil, map[string]any{
 			"label": a.Label, "city": a.City, "state": a.State, "zip": a.ZIP,
 			"customer_id": a.CustomerID, "has_street": a.Street != "",
@@ -97,6 +98,6 @@ func (s *Server) DeleteAddressBookEntry(c echo.Context) error {
 	if err := s.Store.DeleteAddress(ctx, sess.UserID, id); err != nil {
 		return httpx.WriteError(c, err)
 	}
-	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), "address_book", id, "delete", "", before, nil)
+	_ = s.Audit.Log(ctx, sess.UserID, httpx.Workstation(c), httpx.ClientTime(c), audit.EntityAddressBook, id, "delete", "", before, nil)
 	return c.NoContent(http.StatusNoContent)
 }

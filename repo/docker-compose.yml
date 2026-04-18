@@ -24,8 +24,12 @@ services:
       interval: 5s
       timeout:  5s
       retries:  20
-    ports:
-      - "${DB_PORT:-5432}:5432"
+    # No host `ports:` by design. The backend reaches Postgres at
+    # `db:5432` on the internal Docker network, so publishing the DB
+    # port on the host is only useful for ad-hoc psql access — and
+    # almost always collides with a host-native Postgres install.
+    # Operators who want host access can add a ports override in a
+    # `docker-compose.override.yml`.
 
   backend:
     build:
